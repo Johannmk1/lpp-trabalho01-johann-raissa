@@ -119,9 +119,14 @@ async def producao():
             break
         estado["pedra"] += estado["producao_pedra"]
         estado["minerio"] += estado["producao_minerio"]
+        # Recurso refinado: cada fornalha pronta funde 2 minérios em 1 barra,
+        # enquanto houver minério.
+        fundidas = min(estado["concluidas"], estado["minerio"] // 2)
+        estado["minerio"] -= fundidas * 2
+        estado["barras"] += fundidas
         # emit para TODOS: o estoque subiu; os clientes não perguntam
         # "já produziu?", só escutam este fato.
-        await sio.emit("recurso.produzido", fato("temporizador"))
+        await sio.emit("recurso.produzido", fato("temporizador", barras_fundidas=fundidas))
 
 
 async def obra(nome):

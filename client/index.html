@@ -342,7 +342,7 @@
         });
         // on recurso.produzido: vem do temporizador do servidor, sem ninguém
         // clicar. O cliente nunca conta o tempo; só reage quando o fato chega.
-        ouvir("recurso.produzido", "atualiza pedra e minério e mostra o +N", (d) => {
+        ouvir("recurso.produzido", "atualiza pedra, minério e barras e mostra o +N", (d) => {
           atualizar(d);
           jogo.recursoProduzido(d.estado);
         });
