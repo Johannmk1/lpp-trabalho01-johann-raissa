@@ -322,7 +322,13 @@
           avisar("A temporada começou! Os mineiros podem trabalhar.", "ok");
           jogo.vilaIniciada();
         });
-        // ETAPA 3: ouvir "construcao.iniciada"   -> jogo.obraIniciada(...)
+        // on construcao.iniciada: chega para todos, inclusive quem não pediu,
+        // porque o estoque e os mineiros da vila mudaram para todo mundo.
+        ouvir("construcao.iniciada", "mostra o canteiro da fornalha", (d) => {
+          atualizar(d);
+          avisar(d.por + " começou a construir uma fornalha");
+          jogo.obraIniciada(d.estado);
+        });
         // ETAPA 4: ouvir "operacao.recusada"     -> jogo.recusado(...)
         // ETAPA 5: ouvir "recurso.produzido"     -> jogo.recursoProduzido(...)
         //          e "construcao.concluida"      -> jogo.obraConcluida(...)
@@ -336,7 +342,9 @@
         pedir("vila.abertura_solicitada");
       }
       function construir() {
-        // ETAPA 3: pedir "construcao.solicitada"
+        // emit construcao.solicitada: o cliente não desconta pedra nem ocupa mineiro;
+        // só pede. A tela muda quando chegar construcao.iniciada.
+        pedir("construcao.solicitada");
       }
       function encerrarVila() {
         // ETAPA 6: pedir "vila.encerramento_solicitado"

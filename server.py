@@ -76,3 +76,15 @@ async def abrir_vila(sid, dados=None):
     estado["fase"] = "aberta"
     # emit para TODOS: a fase mudou e todo mundo precisa saber que pode agir.
     await sio.emit("vila.iniciada", fato(pedido))
+
+
+# on construcao.solicitada: é um PEDIDO do Jogador para construir uma fornalha.
+@sio.on("construcao.solicitada")
+async def construir(sid, dados=None):
+    pedido = "construcao.solicitada"
+    estado["pedra"] -= CUSTO
+    estado["mineiros"] += 1
+    estado["em_obra"] += 1
+    nome = jogadores[sid]["nome"]
+    # emit para TODOS: pedras e mineiros mudaram para a vila inteira.
+    await sio.emit("construcao.iniciada", fato(pedido, por=nome))
