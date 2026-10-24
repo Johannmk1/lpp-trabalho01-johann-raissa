@@ -74,6 +74,7 @@ async def abrir_vila(sid, dados=None):
         await recusar(sid, "A temporada já foi aberta", pedido)
         return
     estado["fase"] = "aberta"
+    sio.start_background_task(producao)   # o tempo começa a passar na mina
     # emit para TODOS: a fase mudou e todo mundo precisa saber que pode agir.
     await sio.emit("vila.iniciada", fato(pedido))
 
@@ -106,3 +107,30 @@ async def construir(sid, dados=None):
     nome = jogadores[sid]["nome"]
     # emit para TODOS: pedras e mineiros mudaram para a vila inteira.
     await sio.emit("construcao.iniciada", fato(pedido, por=nome))
+    sio.start_background_task(obra, nome)   # a obra termina sozinha depois de TEMPO_OBRA
+
+
+# Temporizador: fonte de eventos sem clique de ninguém. Use sio.sleep (e não
+# time.sleep), senão o servidor inteiro trava esperando.
+async def producao():
+    while estado["fase"] == "aberta":
+        await sio.sleep(INTERVALO)
+        if estado["fase"] != "aberta":
+            break
+        estado["pedra"] += estado["producao_pedra"]
+        estado["minerio"] += estado["producao_minerio"]
+        # emit para TODOS: o estoque subiu; os clientes não perguntam
+        # "já produziu?", só escutam este fato.
+        await sio.emit("recurso.produzido", fato("temporizador"))
+
+
+async def obra(nome):
+    await sio.sleep(TEMPO_OBRA)
+    if estado["fase"] != "aberta":
+        return
+    estado["mineiros"] -= 1
+    estado["em_obra"] -= 1
+    estado["concluidas"] += 1
+    # emit para TODOS: a fornalha ficou pronta e o mineiro voltou a ficar livre.
+    causa = "construcao.iniciada (temporizador)"
+    await sio.emit("construcao.concluida", fato(causa, por=nome))

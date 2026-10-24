@@ -207,7 +207,8 @@
         this.flutuar("🏠 Obra concluída!", obra.x, obra.y - 18, "#1b5e20");
       }
       recursoProduzido(estado) {              // recurso.produzido
-        this.flutuar("+" + estado.producao + " 🪵", this.acampamento.x, this.acampamento.y, "#1b5e20");
+        this.flutuar("+" + estado.producao_pedra + " 🪨 +" + estado.producao_minerio + " ⛰️",
+          this.acampamento.x, this.acampamento.y, "#1b5e20");
       }
       recusado(motivo) {                      // operacao.recusada (só quem pediu)
         this.cameras.main.shake(180, 0.006);
@@ -335,8 +336,20 @@
           avisar(d.motivo, "erro");
           jogo.recusado(d.motivo);
         });
-        // ETAPA 5: ouvir "recurso.produzido"     -> jogo.recursoProduzido(...)
-        //          e "construcao.concluida"      -> jogo.obraConcluida(...)
+        // on recurso.produzido: vem do temporizador do servidor, sem ninguém
+        // clicar. O cliente nunca conta o tempo; só reage quando o fato chega.
+        ouvir("recurso.produzido", "atualiza pedra e minério e mostra o +N", (d) => {
+          atualizar(d);
+          jogo.recursoProduzido(d.estado);
+        });
+
+        // on construcao.concluida: também vem de um temporizador, disparado pela
+        // construcao.iniciada. Chega para todos porque o mineiro ficou livre.
+        ouvir("construcao.concluida", "transforma o canteiro em fornalha", (d) => {
+          atualizar(d);
+          avisar("A fornalha de " + d.por + " ficou pronta!", "ok");
+          jogo.obraConcluida(d.estado);
+        });
         // ETAPA 6: ouvir "vila.encerrada"        -> jogo.vilaEncerrada()
       }
 
