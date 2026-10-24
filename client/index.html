@@ -350,7 +350,13 @@
           avisar("A fornalha de " + d.por + " ficou pronta!", "ok");
           jogo.obraConcluida(d.estado);
         });
-        // ETAPA 6: ouvir "vila.encerrada"        -> jogo.vilaEncerrada()
+        // on vila.encerrada: chega para todos; a partir daqui o servidor recusa
+        // qualquer ação, então a tela só precisa mostrar que a mina fechou.
+        ouvir("vila.encerrada", "escurece a mina e avisa que acabou", (d) => {
+          atualizar(d);
+          avisar("Temporada encerrada. A mina fechou.");
+          jogo.vilaEncerrada();
+        });
       }
 
       // ===== PEDIDOS (emit): o cliente PEDE algo ao servidor =====
@@ -365,7 +371,9 @@
         pedir("construcao.solicitada");
       }
       function encerrarVila() {
-        // ETAPA 6: pedir "vila.encerramento_solicitado"
+        // emit vila.encerramento_solicitado: o botão só PEDE; o servidor confere
+        // se quem pediu é o Mestre e se a temporada está aberta.
+        pedir("vila.encerramento_solicitado");
       }
 
       return { nome, papel, conectado, estado, avisos, eventosVisiveis, contadores, ocultarProducao,

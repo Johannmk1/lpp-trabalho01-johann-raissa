@@ -134,3 +134,20 @@ async def obra(nome):
     # emit para TODOS: a fornalha ficou pronta e o mineiro voltou a ficar livre.
     causa = "construcao.iniciada (temporizador)"
     await sio.emit("construcao.concluida", fato(causa, por=nome))
+
+
+# on vila.encerramento_solicitado: é um PEDIDO do Mestre para fechar a temporada.
+@sio.on("vila.encerramento_solicitado")
+async def encerrar_vila(sid, dados=None):
+    pedido = "vila.encerramento_solicitado"
+    if jogadores[sid]["papel"] != "mestre":
+        await recusar(sid, "Só o Mestre pode abrir ou encerrar a temporada", pedido)
+        return
+    if estado["fase"] != "aberta":
+        await recusar(sid, "A temporada não está aberta", pedido)
+        return
+    # Mudar a fase basta para parar tudo: producao() e obra() conferem a fase
+    # depois de cada espera e não emitem mais nada.
+    estado["fase"] = "encerrada"
+    # emit para TODOS: ninguém pode mais agir, e todos precisam saber.
+    await sio.emit("vila.encerrada", fato(pedido))
