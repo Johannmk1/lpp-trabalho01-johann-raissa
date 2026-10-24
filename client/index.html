@@ -68,8 +68,12 @@
 
     <section>
       <template v-if="papel === 'mestre'">
-        <button @click="abrirVila">Abrir temporada</button>
-        <button @click="encerrarVila">Encerrar temporada</button>
+        <!-- os botões mudam com a fase, mas quem decide se pode é sempre o servidor -->
+        <button v-if="estado.fase === 'aguardando'" @click="abrirVila">▶️ Abrir temporada</button>
+        <button v-if="estado.fase === 'pausada'" @click="abrirVila">▶️ Retomar temporada</button>
+        <button v-if="estado.fase === 'aberta'" @click="pausarVila">⏸️ Pausar temporada</button>
+        <button v-if="estado.fase === 'aberta' || estado.fase === 'pausada'" @click="encerrarVila">⏹️ Encerrar temporada</button>
+        <button v-if="estado.fase === 'encerrada'" @click="reiniciarVila">🔄 Começar do zero</button>
       </template>
       <template v-else>
         <button @click="construir">🔨 Construir fornalha (custo {{ estado.custo }} pedras)</button>
@@ -199,6 +203,7 @@
         }
         for (let i = 0; i < estado.em_obra; i++) this.criarObra(estado.tempo_obra * 1000);
         if (estado.fase === "aberta") this.vilaIniciada();
+        if (estado.fase === "pausada") this.vilaPausada();
         if (estado.fase === "encerrada") this.vilaEncerrada();
       }
       vilaIniciada() {                        // vila.iniciada
@@ -233,6 +238,9 @@
         this.cameras.main.shake(180, 0.006);
         this.flutuar("✋ " + motivo, this.larg / 2, this.alt - 28, "#b00020");
       }
+      vilaPausada() {                         // vila.pausada
+        this.faixa.setText("⏸️ Temporada pausada");
+      }
       vilaEncerrada() {                       // vila.encerrada
         this.faixa.setText("🌙 Temporada encerrada");
         this.add.rectangle(this.larg / 2, this.alt / 2, this.larg, this.alt, 0x000033, 0.35).setDepth(5);
@@ -248,6 +256,11 @@
         });
       },
       mostrarEstado: (...a) => chamar("mostrarEstado", ...a),
+      reiniciar(estado) {                     // vila.reiniciada: recria a cena vazia
+        if (cena) { const c = cena; cena = null; c.scene.restart(); }
+        fila.push(["mostrarEstado", [estado]]);   // roda quando a cena nova ficar pronta
+      },
+      vilaPausada: (...a) => chamar("vilaPausada", ...a),
       vilaIniciada: (...a) => chamar("vilaIniciada", ...a),
       obraIniciada: (...a) => chamar("obraIniciada", ...a),
       obraConcluida: (...a) => chamar("obraConcluida", ...a),
@@ -342,7 +355,7 @@
         // O cliente não abre a temporada sozinho; só reage ao fato confirmado.
         ouvir("vila.iniciada", "muda a faixa para temporada aberta", (d) => {
           atualizar(d);
-          avisar("A temporada começou! Os mineiros podem trabalhar.", "ok");
+          avisar("A temporada está aberta! Os mineiros podem trabalhar.", "ok");
           jogo.vilaIniciada();
         });
         // on construcao.iniciada: chega para todos, inclusive quem não pediu,
@@ -378,6 +391,22 @@
           atualizar(d);
           avisar("Temporada encerrada. A mina fechou.");
           jogo.vilaEncerrada();
+        });
+
+        // on vila.pausada: chega para todos; o tempo parou e só o que já estava
+        // em andamento termina. A tela só mostra a pausa; quem recusa é o servidor.
+        ouvir("vila.pausada", "mostra a faixa de pausa", (d) => {
+          atualizar(d);
+          avisar("Temporada pausada pelo Mestre.");
+          jogo.vilaPausada();
+        });
+
+        // on vila.reiniciada: chega para todos; a mina voltou ao estado inicial,
+        // então cada tela apaga o desenho e redesenha do zero.
+        ouvir("vila.reiniciada", "apaga a mina e começa do zero", (d) => {
+          atualizar(d);
+          avisar("A mina recomeçou do zero.", "ok");
+          jogo.reiniciar(d.estado);
         });
 
         // on expedicao.iniciada: chega para todos, porque um mineiro saiu e
@@ -416,8 +445,16 @@
       }
       function encerrarVila() {
         // emit vila.encerramento_solicitado: o botão só PEDE; o servidor confere
-        // se quem pediu é o Mestre e se a temporada está aberta.
+        // se quem pediu é o Mestre e se a temporada está em andamento.
         pedir("vila.encerramento_solicitado");
+      }
+      function pausarVila() {
+        // emit vila.pausa_solicitada: o servidor confere se a temporada está aberta.
+        pedir("vila.pausa_solicitada");
+      }
+      function reiniciarVila() {
+        // emit vila.reinicio_solicitado: só vale com a temporada encerrada.
+        pedir("vila.reinicio_solicitado");
       }
       function enviarExpedicao() {
         // emit expedicao.solicitada: só pede; o servidor confere fase e mineiro livre.
@@ -429,7 +466,7 @@
       }
 
       return { nome, papel, conectado, estado, avisos, eventosVisiveis, contadores, ocultarProducao,
-               entrar, abrirVila, construir, encerrarVila, enviarExpedicao, chamarExpedicao };
+               entrar, abrirVila, pausarVila, encerrarVila, reiniciarVila, construir, enviarExpedicao, chamarExpedicao };
     }
   }).mount("#app");
 </script>

@@ -18,8 +18,9 @@ PRAZO_EXPEDICAO = 20      # segundos para a expedição voltar antes de se perde
 MINERIO_POR_SEGUNDO = 2   # carga que a expedição junta por segundo fora
 
 # O estado da vila mora só aqui: o servidor é a fonte da verdade.
-estado = {
-    "fase": "aguardando",     # aguardando -> aberta -> encerrada
+# ESTADO_INICIAL é a mina zerada; "começar do zero" volta para ele.
+ESTADO_INICIAL = {
+    "fase": "aguardando",     # aguardando -> aberta <-> pausada -> encerrada -> aguardando
     "pedra": 150,
     "minerio": 0,
     "barras": 0,              # recurso refinado, fundido pelas fornalhas
@@ -33,7 +34,10 @@ estado = {
     "concluidas": 0,          # fornalhas prontas
     "em_obra": 0,             # fornalhas em obra
     "expedicoes": 0,          # expedições em andamento
+    "rodada": 1,              # sobe a cada recomeço; temporizador de rodada velha não vale
 }
+estado = dict(ESTADO_INICIAL)
+ciclo_producao = 0            # sobe a cada abertura; só o laço de produção mais novo produz
 jogadores = {}                # sid -> {"nome": ..., "papel": ...}
 expedicoes = {}               # sid -> {"nome": ..., "saida": ...}; no máximo uma por jogador
 
@@ -72,14 +76,19 @@ async def recusar(sid, motivo, causa):
 @sio.on("vila.abertura_solicitada")
 async def abrir_vila(sid, dados=None):
     pedido = "vila.abertura_solicitada"
+    global ciclo_producao
     if jogadores[sid]["papel"] != "mestre":
-        await recusar(sid, "Só o Mestre pode abrir ou encerrar a temporada", pedido)
+        await recusar(sid, "Só o Mestre controla a temporada", pedido)
         return
-    if estado["fase"] != "aguardando":
-        await recusar(sid, "A temporada já foi aberta", pedido)
+    if estado["fase"] == "aberta":
+        await recusar(sid, "A temporada já está aberta", pedido)
         return
-    estado["fase"] = "aberta"
-    sio.start_background_task(producao)   # o tempo começa a passar na mina
+    if estado["fase"] == "encerrada":
+        await recusar(sid, "A temporada foi encerrada; comece do zero", pedido)
+        return
+    estado["fase"] = "aberta"             # vale para a primeira abertura e para sair da pausa
+    ciclo_producao += 1
+    sio.start_background_task(producao, ciclo_producao)   # o tempo (re)começa a passar
     # emit para TODOS: a fase mudou e todo mundo precisa saber que pode agir.
     await sio.emit("vila.iniciada", fato(pedido))
 
@@ -112,15 +121,17 @@ async def construir(sid, dados=None):
     nome = jogadores[sid]["nome"]
     # emit para TODOS: pedras e mineiros mudaram para a vila inteira.
     await sio.emit("construcao.iniciada", fato(pedido, por=nome))
-    sio.start_background_task(obra, nome)   # a obra termina sozinha depois de TEMPO_OBRA
+    sio.start_background_task(obra, nome, estado["rodada"])   # termina sozinha depois de TEMPO_OBRA
 
 
 # Temporizador: fonte de eventos sem clique de ninguém. Use sio.sleep (e não
 # time.sleep), senão o servidor inteiro trava esperando.
-async def producao():
-    while estado["fase"] == "aberta":
+async def producao(ciclo):
+    # Sai quando a temporada deixa de estar aberta ou quando uma abertura mais
+    # nova começou outro laço (pausar e retomar rápido não pode produzir em dobro).
+    while estado["fase"] == "aberta" and ciclo == ciclo_producao:
         await sio.sleep(INTERVALO)
-        if estado["fase"] != "aberta":
+        if estado["fase"] != "aberta" or ciclo != ciclo_producao:
             break
         estado["pedra"] += estado["producao_pedra"]
         estado["minerio"] += estado["producao_minerio"]
@@ -134,9 +145,10 @@ async def producao():
         await sio.emit("recurso.produzido", fato("temporizador", barras_fundidas=fundidas))
 
 
-async def obra(nome):
+async def obra(nome, rodada):
     await sio.sleep(TEMPO_OBRA)
-    if estado["fase"] != "aberta":
+    # Na pausa a obra termina normalmente; encerrada ou de uma rodada antiga, não.
+    if estado["fase"] not in ("aberta", "pausada") or estado["rodada"] != rodada:
         return
     estado["mineiros"] -= 1
     estado["em_obra"] -= 1
@@ -151,16 +163,51 @@ async def obra(nome):
 async def encerrar_vila(sid, dados=None):
     pedido = "vila.encerramento_solicitado"
     if jogadores[sid]["papel"] != "mestre":
-        await recusar(sid, "Só o Mestre pode abrir ou encerrar a temporada", pedido)
+        await recusar(sid, "Só o Mestre controla a temporada", pedido)
         return
-    if estado["fase"] != "aberta":
-        await recusar(sid, "A temporada não está aberta", pedido)
+    if estado["fase"] not in ("aberta", "pausada"):
+        await recusar(sid, "A temporada não está em andamento", pedido)
         return
     # Mudar a fase basta para parar tudo: producao() e obra() conferem a fase
     # depois de cada espera e não emitem mais nada.
     estado["fase"] = "encerrada"
     # emit para TODOS: ninguém pode mais agir, e todos precisam saber.
     await sio.emit("vila.encerrada", fato(pedido))
+
+
+# on vila.pausa_solicitada: PEDIDO do Mestre para parar o tempo sem acabar o jogo.
+@sio.on("vila.pausa_solicitada")
+async def pausar_vila(sid, dados=None):
+    pedido = "vila.pausa_solicitada"
+    if jogadores[sid]["papel"] != "mestre":
+        await recusar(sid, "Só o Mestre controla a temporada", pedido)
+        return
+    if estado["fase"] != "aberta":
+        await recusar(sid, "A temporada não está aberta", pedido)
+        return
+    # A produção para sozinha (o laço confere a fase). Obras e expedições que
+    # já estavam em andamento terminam normalmente.
+    estado["fase"] = "pausada"
+    # emit para TODOS: ninguém pode pedir nada novo até o Mestre reabrir.
+    await sio.emit("vila.pausada", fato(pedido))
+
+
+# on vila.reinicio_solicitado: PEDIDO do Mestre para começar do zero depois de encerrar.
+@sio.on("vila.reinicio_solicitado")
+async def reiniciar_vila(sid, dados=None):
+    pedido = "vila.reinicio_solicitado"
+    if jogadores[sid]["papel"] != "mestre":
+        await recusar(sid, "Só o Mestre controla a temporada", pedido)
+        return
+    if estado["fase"] != "encerrada":
+        await recusar(sid, "Encerre a temporada antes de começar do zero", pedido)
+        return
+    rodada = estado["rodada"] + 1
+    estado.clear()
+    estado.update(ESTADO_INICIAL, rodada=rodada)   # obras antigas conferem a rodada e não terminam
+    expedicoes.clear()                             # prazos antigos não acham mais a expedição
+    # emit para TODOS: a mina inteira voltou ao começo e todas as telas redesenham.
+    await sio.emit("vila.reiniciada", fato(pedido))
 
 
 # on expedicao.solicitada: PEDIDO do Jogador para mandar um mineiro buscar minério.
@@ -198,7 +245,7 @@ async def enviar_expedicao(sid, dados=None):
 @sio.on("expedicao.retorno_solicitado")
 async def retornar_expedicao(sid, dados=None):
     pedido = "expedicao.retorno_solicitado"
-    if estado["fase"] != "aberta":
+    if estado["fase"] not in ("aberta", "pausada"):   # na pausa ainda dá para chamar de volta
         await recusar(sid, "A temporada não está aberta", pedido)
         return
     expedicao = expedicoes.pop(sid, None)
@@ -222,7 +269,7 @@ async def prazo_expedicao(sid, expedicao):
     await sio.sleep(PRAZO_EXPEDICAO)
     # Só perde se for ESTA expedição e ela ainda estiver fora (o jogador pode
     # ter chamado de volta antes, ou já ter mandado outra depois).
-    if estado["fase"] != "aberta" or expedicoes.get(sid) is not expedicao:
+    if estado["fase"] not in ("aberta", "pausada") or expedicoes.get(sid) is not expedicao:
         return
     del expedicoes[sid]
     estado["mineiros"] -= 1
