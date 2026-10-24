@@ -23,6 +23,7 @@
     .hud { display: flex; flex-wrap: wrap; gap: 4px 14px; justify-content: center; padding: 8px 10px;
            background: #0f0a08; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
     .hud small { color: #b6a596; }
+    .hud .icone { image-rendering: pixelated; vertical-align: -2px; margin-right: 4px; }
     #jogo { line-height: 0; }
     #jogo canvas { width: 100% !important; height: auto !important; image-rendering: pixelated; }
     .eventos { border: 1px solid #4a3a2e; border-radius: 10px; padding: 10px; margin: 12px 0; background: #201813; }
@@ -66,9 +67,10 @@
     <!-- A mina desenhada pelo Phaser, com a barra de status em cima -->
     <div class="mina">
       <div class="hud">
-        <span>🪨 {{ estado.pedra }} <small>+{{ livres * estado.pedra_por_mineiro }}/{{ estado.intervalo }}s</small></span>
-        <span>⛰️ {{ estado.minerio }} <small>+{{ livres * estado.minerio_por_mineiro }}/{{ estado.intervalo }}s</small></span>
-        <span>🧱 {{ estado.barras }}</span>
+        <!-- os ícones são os mesmos sprites das pilhas da mina, ampliados 2x -->
+        <span><img class="icone" src="assets/sprites/pedra.png" width="16" alt="">pedra {{ estado.pedra }} <small>+{{ livres * estado.pedra_por_mineiro }}/{{ estado.intervalo }}s</small></span>
+        <span><img class="icone" src="assets/sprites/minerio.png" width="16" alt="">minério {{ estado.minerio }} <small>+{{ livres * estado.minerio_por_mineiro }}/{{ estado.intervalo }}s</small></span>
+        <span><img class="icone" src="assets/sprites/barra.png" width="22" alt="">barras de ouro {{ estado.barras }}</span>
         <span>⛏️ {{ estado.mineiros }}/{{ estado.limite }} <small>ocupados</small></span>
         <span>🔥 {{ estado.fornalhas }} · 📦 {{ estado.depositos }} · 🚧 {{ estado.em_obra }} · 🧭 {{ estado.expedicoes }}</span>
         <span>🏗️ {{ estado.lotes.filter(Boolean).length }}/{{ estado.lotes.length }} lotes</span>
