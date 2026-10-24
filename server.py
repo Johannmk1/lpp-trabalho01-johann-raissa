@@ -11,8 +11,13 @@ app = socketio.ASGIApp(sio, static_files={
 # A partir da Etapa 1, adicione o seu código ABAIXO desta linha.
 
 # Regras da Mina (docs/especificacao.md, seção 1)
-CUSTO = 50          # pedras por fornalha
-TEMPO_OBRA = 8      # segundos até a fornalha ficar pronta
+# Cada construção custa um recurso diferente: é o que fecha o ciclo da mina
+# (pedra -> fornalha -> barras -> depósito -> mais mineiros).
+CONSTRUCOES = {
+    "fornalha": {"recurso": "pedra", "custo": 50, "falta": "Pedras insuficientes"},
+    "deposito": {"recurso": "barras", "custo": 5, "falta": "Barras insuficientes"},
+}
+TEMPO_OBRA = 8      # segundos até a obra ficar pronta
 INTERVALO = 5       # segundos entre as produções
 PRAZO_EXPEDICAO = 20      # segundos para a expedição voltar antes de se perder
 MINERIO_POR_SEGUNDO = 2   # carga que a expedição junta por segundo fora
@@ -30,9 +35,11 @@ ESTADO_INICIAL = {
     "producao_minerio": 5,    # minérios a cada INTERVALO
     "intervalo": INTERVALO,
     "tempo_obra": TEMPO_OBRA,
-    "custo": CUSTO,
-    "concluidas": 0,          # fornalhas prontas
-    "em_obra": 0,             # fornalhas em obra
+    "custo_fornalha": CONSTRUCOES["fornalha"]["custo"],   # pedras
+    "custo_deposito": CONSTRUCOES["deposito"]["custo"],   # barras
+    "fornalhas": 0,           # fornalhas prontas
+    "depositos": 0,           # depósitos prontos (cada um deu +1 no limite)
+    "em_obra": 0,             # obras em andamento, de qualquer tipo
     "expedicoes": 0,          # expedições em andamento
     "rodada": 1,              # sobe a cada recomeço; temporizador de rodada velha não vale
 }
@@ -93,19 +100,24 @@ async def abrir_vila(sid, dados=None):
     await sio.emit("vila.iniciada", fato(pedido))
 
 
-# on construcao.solicitada: é um PEDIDO do Jogador para construir uma fornalha.
+# on construcao.solicitada: é um PEDIDO do Jogador; os dados dizem o tipo
+# ("fornalha" ou "deposito").
 @sio.on("construcao.solicitada")
 async def construir(sid, dados=None):
     pedido = "construcao.solicitada"
+    tipo = (dados or {}).get("tipo", "fornalha")
+    regra = CONSTRUCOES.get(tipo)
     # Valida TUDO antes de alterar o estado e sem await no meio: o servidor
     # trata um evento por vez, então dois pedidos simultâneos são decididos
     # em sequência e só um leva o último mineiro ou as últimas pedras.
     if jogadores[sid]["papel"] != "jogador":
         motivo = "Só jogadores constroem e enviam expedições"
+    elif regra is None:
+        motivo = "Construção desconhecida"
     elif estado["fase"] != "aberta":
         motivo = "A temporada não está aberta"
-    elif estado["pedra"] < CUSTO:
-        motivo = "Pedras insuficientes"
+    elif estado[regra["recurso"]] < regra["custo"]:
+        motivo = regra["falta"]
     elif estado["mineiros"] >= estado["limite"]:
         motivo = "Sem mineiro livre"
     else:
@@ -115,13 +127,13 @@ async def construir(sid, dados=None):
         await recusar(sid, motivo, pedido)
         return
 
-    estado["pedra"] -= CUSTO
+    estado[regra["recurso"]] -= regra["custo"]
     estado["mineiros"] += 1
     estado["em_obra"] += 1
     nome = jogadores[sid]["nome"]
-    # emit para TODOS: pedras e mineiros mudaram para a vila inteira.
-    await sio.emit("construcao.iniciada", fato(pedido, por=nome))
-    sio.start_background_task(obra, nome, estado["rodada"])   # termina sozinha depois de TEMPO_OBRA
+    # emit para TODOS: o estoque e os mineiros mudaram para a vila inteira.
+    await sio.emit("construcao.iniciada", fato(pedido, por=nome, tipo=tipo))
+    sio.start_background_task(obra, nome, tipo, estado["rodada"])   # termina sozinha depois de TEMPO_OBRA
 
 
 # Temporizador: fonte de eventos sem clique de ninguém. Use sio.sleep (e não
@@ -137,7 +149,7 @@ async def producao(ciclo):
         estado["minerio"] += estado["producao_minerio"]
         # Recurso refinado: cada fornalha pronta funde 2 minérios em 1 barra,
         # enquanto houver minério.
-        fundidas = min(estado["concluidas"], estado["minerio"] // 2)
+        fundidas = min(estado["fornalhas"], estado["minerio"] // 2)
         estado["minerio"] -= fundidas * 2
         estado["barras"] += fundidas
         # emit para TODOS: o estoque subiu; os clientes não perguntam
@@ -145,17 +157,21 @@ async def producao(ciclo):
         await sio.emit("recurso.produzido", fato("temporizador", barras_fundidas=fundidas))
 
 
-async def obra(nome, rodada):
+async def obra(nome, tipo, rodada):
     await sio.sleep(TEMPO_OBRA)
     # Na pausa a obra termina normalmente; encerrada ou de uma rodada antiga, não.
     if estado["fase"] not in ("aberta", "pausada") or estado["rodada"] != rodada:
         return
     estado["mineiros"] -= 1
     estado["em_obra"] -= 1
-    estado["concluidas"] += 1
-    # emit para TODOS: a fornalha ficou pronta e o mineiro voltou a ficar livre.
+    if tipo == "fornalha":
+        estado["fornalhas"] += 1          # passa a fundir barras na próxima produção
+    else:
+        estado["depositos"] += 1
+        estado["limite"] += 1             # o depósito abriga mais um mineiro
+    # emit para TODOS: a obra ficou pronta e o mineiro voltou a ficar livre.
     causa = "construcao.iniciada (temporizador)"
-    await sio.emit("construcao.concluida", fato(causa, por=nome))
+    await sio.emit("construcao.concluida", fato(causa, por=nome, tipo=tipo))
 
 
 # on vila.encerramento_solicitado: é um PEDIDO do Mestre para fechar a temporada.

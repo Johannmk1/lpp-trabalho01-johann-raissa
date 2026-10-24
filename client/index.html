@@ -63,7 +63,7 @@
       <p>🧱 Barras: <strong>{{ estado.barras }}</strong></p>
       <p>⛏️ Mineiros: {{ estado.mineiros }}/{{ estado.limite }}
         <progress :value="estado.mineiros" :max="estado.limite"></progress></p>
-      <p>🔥 Fornalhas: {{ estado.concluidas }} prontas, {{ estado.em_obra }} em obra · 🧭 Expedições: {{ estado.expedicoes }}</p>
+      <p>🔥 Fornalhas: {{ estado.fornalhas }} · 📦 Depósitos: {{ estado.depositos }} · 🚧 Em obra: {{ estado.em_obra }} · 🧭 Expedições: {{ estado.expedicoes }}</p>
     </section>
 
     <section>
@@ -76,7 +76,8 @@
         <button v-if="estado.fase === 'encerrada'" @click="reiniciarVila">🔄 Começar do zero</button>
       </template>
       <template v-else>
-        <button @click="construir">🔨 Construir fornalha (custo {{ estado.custo }} pedras)</button>
+        <button @click="construir('fornalha')">🔥 Construir fornalha ({{ estado.custo_fornalha }} pedras)</button>
+        <button @click="construir('deposito')">📦 Construir depósito ({{ estado.custo_deposito }} barras)</button>
         <button @click="enviarExpedicao">🧭 Enviar expedição</button>
         <button @click="chamarExpedicao">↩️ Chamar de volta</button>
       </template>
@@ -197,7 +198,7 @@
 
       // ----- um método para cada evento do servidor -----
       mostrarEstado(estado) {                 // estado.sincronizado
-        for (let i = 0; i < estado.concluidas; i++) {
+        for (let i = 0; i < estado.fornalhas + estado.depositos; i++) {
           const p = this.lote(this.usados++);
           this.criarCasa(p.x, p.y);
         }
@@ -209,16 +210,17 @@
       vilaIniciada() {                        // vila.iniciada
         this.faixa.setText("☀️ Temporada aberta");
       }
-      obraIniciada(estado) {                  // construcao.iniciada
+      obraIniciada(estado, tipo) {            // construcao.iniciada
         this.criarObra(estado.tempo_obra * 1000);
-        this.flutuar("-" + estado.custo + " 🪨", this.acampamento.x, this.acampamento.y, "#b00020");
+        const gasto = tipo === "deposito" ? estado.custo_deposito + " 🧱" : estado.custo_fornalha + " 🪨";
+        this.flutuar("-" + gasto, this.acampamento.x, this.acampamento.y, "#b00020");
       }
-      obraConcluida(estado) {                 // construcao.concluida
+      obraConcluida(estado, tipo) {           // construcao.concluida
         const obra = this.obras.shift();
         if (!obra) return;
         obra.canteiro.destroy(); obra.fundo.destroy(); obra.barra.destroy();
         this.criarCasa(obra.x, obra.y);
-        this.flutuar("🔥 Fornalha pronta!", obra.x, obra.y - 18, "#1b5e20");
+        this.flutuar(tipo === "deposito" ? "📦 Depósito pronto!" : "🔥 Fornalha pronta!", obra.x, obra.y - 18, "#1b5e20");
       }
       recursoProduzido(estado, fundidas) {    // recurso.produzido
         const barras = fundidas ? " +" + fundidas + " 🧱" : "";
@@ -287,8 +289,8 @@
       const conectado = ref(false);
       const estado = reactive({
         fase: "aguardando", pedra: 0, minerio: 0, barras: 0, mineiros: 0, limite: 0,
-        producao_pedra: 0, producao_minerio: 0, intervalo: 0, tempo_obra: 0, custo: 0,
-        concluidas: 0, em_obra: 0, expedicoes: 0,
+        producao_pedra: 0, producao_minerio: 0, intervalo: 0, tempo_obra: 0,
+        custo_fornalha: 0, custo_deposito: 0, fornalhas: 0, depositos: 0, em_obra: 0, expedicoes: 0,
       });
       const avisos = ref([]);
       const eventos = ref([]);              // linha do tempo do painel de eventos
@@ -360,10 +362,10 @@
         });
         // on construcao.iniciada: chega para todos, inclusive quem não pediu,
         // porque o estoque e os mineiros da vila mudaram para todo mundo.
-        ouvir("construcao.iniciada", "mostra o canteiro da fornalha", (d) => {
+        ouvir("construcao.iniciada", "mostra o canteiro da obra", (d) => {
           atualizar(d);
-          avisar(d.por + " começou a construir uma fornalha");
-          jogo.obraIniciada(d.estado);
+          avisar(d.por + " começou a construir " + (d.tipo === "deposito" ? "um depósito" : "uma fornalha"));
+          jogo.obraIniciada(d.estado, d.tipo);
         });
         // on operacao.recusada: só chega para quem fez o pedido recusado. Não há
         // estado para atualizar (nada mudou no servidor); só avisamos o motivo.
@@ -380,10 +382,12 @@
 
         // on construcao.concluida: também vem de um temporizador, disparado pela
         // construcao.iniciada. Chega para todos porque o mineiro ficou livre.
-        ouvir("construcao.concluida", "transforma o canteiro em fornalha", (d) => {
+        ouvir("construcao.concluida", "transforma o canteiro na construção pronta", (d) => {
           atualizar(d);
-          avisar("A fornalha de " + d.por + " ficou pronta!", "ok");
-          jogo.obraConcluida(d.estado);
+          avisar(d.tipo === "deposito"
+            ? "O depósito de " + d.por + " ficou pronto! +1 mineiro"
+            : "A fornalha de " + d.por + " ficou pronta!", "ok");
+          jogo.obraConcluida(d.estado, d.tipo);
         });
         // on vila.encerrada: chega para todos; a partir daqui o servidor recusa
         // qualquer ação, então a tela só precisa mostrar que a mina fechou.
@@ -438,10 +442,10 @@
         // emit vila.abertura_solicitada: o botão só PEDE; quem decide é o servidor.
         pedir("vila.abertura_solicitada");
       }
-      function construir() {
-        // emit construcao.solicitada: o cliente não desconta pedra nem ocupa mineiro;
-        // só pede. A tela muda quando chegar construcao.iniciada.
-        pedir("construcao.solicitada");
+      function construir(tipo) {
+        // emit construcao.solicitada: o cliente não desconta recurso nem ocupa mineiro;
+        // só pede, dizendo o tipo. A tela muda quando chegar construcao.iniciada.
+        pedir("construcao.solicitada", { tipo });
       }
       function encerrarVila() {
         // emit vila.encerramento_solicitado: o botão só PEDE; o servidor confere
