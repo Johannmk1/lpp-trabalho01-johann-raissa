@@ -61,6 +61,8 @@ def fato(causa, **extras):
     return {"estado": copy.deepcopy(estado), "causa": causa, **extras}
 
 
+# on connect: evento do próprio Socket.IO quando alguém entra. É aqui que o
+# servidor fica sabendo o nome e o papel (Mestre ou Jogador) de cada aba.
 @sio.event
 async def connect(sid, environ, auth):
     auth = auth or {}
@@ -73,6 +75,7 @@ async def connect(sid, environ, auth):
     await sio.emit("estado.sincronizado", fato("conexao"), to=sid)
 
 
+# on disconnect: a aba fechou; o jogador sai da lista (a mina continua igual).
 @sio.event
 async def disconnect(sid):
     jogadores.pop(sid, None)
