@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vila em Tempo Real</title>
+  <title>Mina em Tempo Real</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 580px; margin: 24px auto; padding: 0 12px; }
     .cartao, .painel { border: 1px solid #ccc; border-radius: 8px; padding: 12px; margin: 12px 0; }
@@ -43,7 +43,7 @@
 
   <!-- Tela de entrada -->
   <section v-if="!conectado" class="cartao">
-    <h1>🏘️ Vila em Tempo Real</h1>
+    <h1>⛏️ Mina em Tempo Real</h1>
     <input v-model="nome" placeholder="Seu nome">
     <button @click="entrar('mestre')">Entrar como Mestre</button>
     <button @click="entrar('jogador')">Entrar como Jogador</button>
@@ -51,7 +51,7 @@
 
   <!-- Tela da vila -->
   <main v-else>
-    <h1>🏘️ Vila</h1>
+    <h1>⛏️ Mina</h1>
     <p>{{ papel }}: <strong>{{ nome || "Anônimo" }}</strong> · Temporada: <strong>{{ estado.fase }}</strong></p>
 
     <!-- A vila desenhada pelo Phaser aparece aqui -->
@@ -108,7 +108,7 @@
     </section>
   </main>
 
-  <footer>Desenvolvido por: [Nome do(a) Aluno(a)]</footer>
+  <footer>Desenvolvido por: Johann Malkowski (@Johannmk1) e Raíssa Sofka Mazzi (@Raissa-SM)</footer>
 </div>
 
 <script src="https://unpkg.com/vue@3.5.13/dist/vue.global.js"></script>
@@ -187,6 +187,7 @@
           fontSize: "8px", color: cor, fontStyle: "bold", stroke: "#ffffff",
           strokeThickness: 2, resolution: 2,
         }).setOrigin(0.5).setDepth(8);
+        t.x = Phaser.Math.Clamp(x, t.width / 2 + 2, this.larg - t.width / 2 - 2);   // não corta na borda do mapa
         this.tweens.add({ targets: t, y: y - 16, alpha: 0, duration: 1400, onComplete: () => t.destroy() });
       }
 
@@ -205,18 +206,28 @@
       }
       obraIniciada(estado) {                  // construcao.iniciada
         this.criarObra(estado.tempo_obra * 1000);
-        this.flutuar("-" + estado.custo + " 🪵", this.acampamento.x, this.acampamento.y, "#b00020");
+        this.flutuar("-" + estado.custo + " 🪨", this.acampamento.x, this.acampamento.y, "#b00020");
       }
       obraConcluida(estado) {                 // construcao.concluida
         const obra = this.obras.shift();
         if (!obra) return;
         obra.canteiro.destroy(); obra.fundo.destroy(); obra.barra.destroy();
         this.criarCasa(obra.x, obra.y);
-        this.flutuar("🏠 Obra concluída!", obra.x, obra.y - 18, "#1b5e20");
+        this.flutuar("🔥 Fornalha pronta!", obra.x, obra.y - 18, "#1b5e20");
       }
-      recursoProduzido(estado) {              // recurso.produzido
-        this.flutuar("+" + estado.producao_pedra + " 🪨 +" + estado.producao_minerio + " ⛰️",
+      recursoProduzido(estado, fundidas) {    // recurso.produzido
+        const barras = fundidas ? " +" + fundidas + " 🧱" : "";
+        this.flutuar("+" + estado.producao_pedra + " 🪨 +" + estado.producao_minerio + " ⛰️" + barras,
           this.acampamento.x, this.acampamento.y, "#1b5e20");
+      }
+      expedicaoIniciada(por) {                // expedicao.iniciada
+        this.flutuar("🧭 " + por + " saiu em expedição", this.larg / 2, this.alt - 12, "#1a237e");
+      }
+      expedicaoRetornada(por, minerio) {      // expedicao.retornada
+        this.flutuar("🧭 " + por + " voltou: +" + minerio + " ⛰️", this.larg / 2, this.alt - 12, "#1b5e20");
+      }
+      expedicaoPerdida(por) {                 // expedicao.perdida
+        this.flutuar("💀 " + por + " perdeu a carga", this.larg / 2, this.alt - 12, "#b00020");
       }
       recusado(motivo) {                      // operacao.recusada (só quem pediu)
         this.cameras.main.shake(180, 0.006);
@@ -243,6 +254,9 @@
       recursoProduzido: (...a) => chamar("recursoProduzido", ...a),
       recusado: (...a) => chamar("recusado", ...a),
       vilaEncerrada: (...a) => chamar("vilaEncerrada", ...a),
+      expedicaoIniciada: (...a) => chamar("expedicaoIniciada", ...a),
+      expedicaoRetornada: (...a) => chamar("expedicaoRetornada", ...a),
+      expedicaoPerdida: (...a) => chamar("expedicaoPerdida", ...a),
     };
   }
 </script>
@@ -348,7 +362,7 @@
         // clicar. O cliente nunca conta o tempo; só reage quando o fato chega.
         ouvir("recurso.produzido", "atualiza pedra, minério e barras e mostra o +N", (d) => {
           atualizar(d);
-          jogo.recursoProduzido(d.estado);
+          jogo.recursoProduzido(d.estado, d.barras_fundidas);
         });
 
         // on construcao.concluida: também vem de um temporizador, disparado pela
@@ -371,18 +385,21 @@
         ouvir("expedicao.iniciada", "avisa que o mineiro saiu e qual é o prazo", (d) => {
           atualizar(d);
           avisar(d.por + " mandou um mineiro em expedição (volte em até " + d.prazo + " s)");
+          jogo.expedicaoIniciada(d.por);
         });
 
         // on expedicao.retornada: chega para todos; o minério trazido entrou no estoque.
         ouvir("expedicao.retornada", "soma o minério trazido e libera o mineiro", (d) => {
           atualizar(d);
           avisar("A expedição de " + d.por + " voltou com " + d.minerio + " minérios", "ok");
+          jogo.expedicaoRetornada(d.por, d.minerio);
         });
 
         // on expedicao.perdida: vem do temporizador do prazo, sem ninguém clicar.
         ouvir("expedicao.perdida", "avisa que a carga se perdeu e libera o mineiro", (d) => {
           atualizar(d);
           avisar("A expedição de " + d.por + " passou do prazo e perdeu a carga", "erro");
+          jogo.expedicaoPerdida(d.por);
         });
       }
 
