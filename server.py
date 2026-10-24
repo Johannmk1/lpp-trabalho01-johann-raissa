@@ -82,6 +82,24 @@ async def abrir_vila(sid, dados=None):
 @sio.on("construcao.solicitada")
 async def construir(sid, dados=None):
     pedido = "construcao.solicitada"
+    # Valida TUDO antes de alterar o estado e sem await no meio: o servidor
+    # trata um evento por vez, então dois pedidos simultâneos são decididos
+    # em sequência e só um leva o último mineiro ou as últimas pedras.
+    if jogadores[sid]["papel"] != "jogador":
+        motivo = "Só jogadores constroem e enviam expedições"
+    elif estado["fase"] != "aberta":
+        motivo = "A temporada não está aberta"
+    elif estado["pedra"] < CUSTO:
+        motivo = "Pedras insuficientes"
+    elif estado["mineiros"] >= estado["limite"]:
+        motivo = "Sem mineiro livre"
+    else:
+        motivo = None
+
+    if motivo:
+        await recusar(sid, motivo, pedido)
+        return
+
     estado["pedra"] -= CUSTO
     estado["mineiros"] += 1
     estado["em_obra"] += 1
