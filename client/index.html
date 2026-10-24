@@ -71,7 +71,11 @@
         <button @click="abrirVila">Abrir temporada</button>
         <button @click="encerrarVila">Encerrar temporada</button>
       </template>
-      <button v-else @click="construir">🔨 Construir fornalha (custo {{ estado.custo }} pedras)</button>
+      <template v-else>
+        <button @click="construir">🔨 Construir fornalha (custo {{ estado.custo }} pedras)</button>
+        <button @click="enviarExpedicao">🧭 Enviar expedição</button>
+        <button @click="chamarExpedicao">↩️ Chamar de volta</button>
+      </template>
     </section>
 
     <ul class="avisos">
@@ -361,6 +365,25 @@
           avisar("Temporada encerrada. A mina fechou.");
           jogo.vilaEncerrada();
         });
+
+        // on expedicao.iniciada: chega para todos, porque um mineiro saiu e
+        // ficou ocupado. O prazo vem do servidor; o cliente não conta o tempo.
+        ouvir("expedicao.iniciada", "avisa que o mineiro saiu e qual é o prazo", (d) => {
+          atualizar(d);
+          avisar(d.por + " mandou um mineiro em expedição (volte em até " + d.prazo + " s)");
+        });
+
+        // on expedicao.retornada: chega para todos; o minério trazido entrou no estoque.
+        ouvir("expedicao.retornada", "soma o minério trazido e libera o mineiro", (d) => {
+          atualizar(d);
+          avisar("A expedição de " + d.por + " voltou com " + d.minerio + " minérios", "ok");
+        });
+
+        // on expedicao.perdida: vem do temporizador do prazo, sem ninguém clicar.
+        ouvir("expedicao.perdida", "avisa que a carga se perdeu e libera o mineiro", (d) => {
+          atualizar(d);
+          avisar("A expedição de " + d.por + " passou do prazo e perdeu a carga", "erro");
+        });
       }
 
       // ===== PEDIDOS (emit): o cliente PEDE algo ao servidor =====
@@ -379,9 +402,17 @@
         // se quem pediu é o Mestre e se a temporada está aberta.
         pedir("vila.encerramento_solicitado");
       }
+      function enviarExpedicao() {
+        // emit expedicao.solicitada: só pede; o servidor confere fase e mineiro livre.
+        pedir("expedicao.solicitada");
+      }
+      function chamarExpedicao() {
+        // emit expedicao.retorno_solicitado: quem decide se ainda dá tempo é o servidor.
+        pedir("expedicao.retorno_solicitado");
+      }
 
       return { nome, papel, conectado, estado, avisos, eventosVisiveis, contadores, ocultarProducao,
-               entrar, abrirVila, construir, encerrarVila };
+               entrar, abrirVila, construir, encerrarVila, enviarExpedicao, chamarExpedicao };
     }
   }).mount("#app");
 </script>

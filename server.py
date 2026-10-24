@@ -1,3 +1,5 @@
+import time
+
 import socketio
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
@@ -12,6 +14,8 @@ app = socketio.ASGIApp(sio, static_files={
 CUSTO = 50          # pedras por fornalha
 TEMPO_OBRA = 8      # segundos até a fornalha ficar pronta
 INTERVALO = 5       # segundos entre as produções
+PRAZO_EXPEDICAO = 20      # segundos para a expedição voltar antes de se perder
+MINERIO_POR_SEGUNDO = 2   # carga que a expedição junta por segundo fora
 
 # O estado da vila mora só aqui: o servidor é a fonte da verdade.
 estado = {
@@ -31,6 +35,7 @@ estado = {
     "expedicoes": 0,          # expedições em andamento
 }
 jogadores = {}                # sid -> {"nome": ..., "papel": ...}
+expedicoes = {}               # sid -> {"nome": ..., "saida": ...}; no máximo uma por jogador
 
 
 def fato(causa, **extras):
@@ -156,3 +161,72 @@ async def encerrar_vila(sid, dados=None):
     estado["fase"] = "encerrada"
     # emit para TODOS: ninguém pode mais agir, e todos precisam saber.
     await sio.emit("vila.encerrada", fato(pedido))
+
+
+# on expedicao.solicitada: PEDIDO do Jogador para mandar um mineiro buscar minério.
+@sio.on("expedicao.solicitada")
+async def enviar_expedicao(sid, dados=None):
+    pedido = "expedicao.solicitada"
+    # Mesma regra da construção: valida tudo e só depois altera, sem await no
+    # meio, para a disputa pelo último mineiro ter um vencedor só.
+    if jogadores[sid]["papel"] != "jogador":
+        motivo = "Só jogadores constroem e enviam expedições"
+    elif estado["fase"] != "aberta":
+        motivo = "A temporada não está aberta"
+    elif sid in expedicoes:
+        motivo = "Você já tem uma expedição em andamento"
+    elif estado["mineiros"] >= estado["limite"]:
+        motivo = "Sem mineiro livre"
+    else:
+        motivo = None
+
+    if motivo:
+        await recusar(sid, motivo, pedido)
+        return
+
+    nome = jogadores[sid]["nome"]
+    expedicao = {"nome": nome, "saida": time.monotonic()}
+    expedicoes[sid] = expedicao
+    estado["mineiros"] += 1
+    estado["expedicoes"] += 1
+    # emit para TODOS: um mineiro saiu e ficou ocupado para a vila inteira.
+    await sio.emit("expedicao.iniciada", fato(pedido, por=nome, prazo=PRAZO_EXPEDICAO))
+    sio.start_background_task(prazo_expedicao, sid, expedicao)
+
+
+# on expedicao.retorno_solicitado: PEDIDO do Jogador para chamar o mineiro de volta.
+@sio.on("expedicao.retorno_solicitado")
+async def retornar_expedicao(sid, dados=None):
+    pedido = "expedicao.retorno_solicitado"
+    if estado["fase"] != "aberta":
+        await recusar(sid, "A temporada não está aberta", pedido)
+        return
+    expedicao = expedicoes.pop(sid, None)
+    if expedicao is None:
+        # Também cai aqui quem pede o retorno logo depois do prazo vencer: o
+        # temporizador chegou primeiro e a expedição já foi perdida.
+        await recusar(sid, "Você não tem expedição em andamento", pedido)
+        return
+    segundos = int(time.monotonic() - expedicao["saida"])
+    trazido = segundos * MINERIO_POR_SEGUNDO
+    estado["minerio"] += trazido
+    estado["mineiros"] -= 1
+    estado["expedicoes"] -= 1
+    # emit para TODOS: o minério entrou no estoque e o mineiro está livre.
+    await sio.emit("expedicao.retornada",
+                   fato(pedido, por=expedicao["nome"], segundos=segundos, minerio=trazido))
+
+
+# Temporizador do prazo: se a expedição não voltou a tempo, a carga se perde.
+async def prazo_expedicao(sid, expedicao):
+    await sio.sleep(PRAZO_EXPEDICAO)
+    # Só perde se for ESTA expedição e ela ainda estiver fora (o jogador pode
+    # ter chamado de volta antes, ou já ter mandado outra depois).
+    if estado["fase"] != "aberta" or expedicoes.get(sid) is not expedicao:
+        return
+    del expedicoes[sid]
+    estado["mineiros"] -= 1
+    estado["expedicoes"] -= 1
+    # emit para TODOS: o mineiro voltou sem nada e ficou livre de novo.
+    causa = "expedicao.iniciada (temporizador)"
+    await sio.emit("expedicao.perdida", fato(causa, por=expedicao["nome"]))
