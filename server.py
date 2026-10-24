@@ -1,22 +1,28 @@
+import copy
 import time
 
 import socketio
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 app = socketio.ASGIApp(sio, static_files={
-    "/": "client/index.html",        # a mina é desenhada por código: não há imagens
+    "/": "client/index.html",
+    "/assets": "client/assets",      # tileset do kit e sprites da mina
 })
 
 # A partir da Etapa 1, adicione o seu código ABAIXO desta linha.
 
 # Regras da Mina (docs/especificacao.md, seção 1)
-# Cada construção custa um recurso diferente: é o que fecha o ciclo da mina
-# (pedra -> fornalha -> barras -> depósito -> mais mineiros).
+# Cada construção custa recursos diferentes: é o que fecha o ciclo da mina
+# (pedra -> fornalha -> barras -> depósito -> mais mineiros -> estátua de ouro).
 CONSTRUCOES = {
-    "fornalha": {"recurso": "pedra", "custo": 50, "falta": "Pedras insuficientes"},
-    "deposito": {"recurso": "barras", "custo": 5, "falta": "Barras insuficientes"},
+    "fornalha": {"custo": {"pedra": 50}, "tempo": 8, "usa_lote": True,
+                 "falta": {"pedra": "Pedras insuficientes"}},
+    "deposito": {"custo": {"barras": 5}, "tempo": 8, "usa_lote": True,
+                 "falta": {"barras": "Barras insuficientes"}},
+    "estatua": {"custo": {"pedra": 200, "barras": 30}, "tempo": 15, "usa_lote": False,
+                "falta": {"pedra": "Pedras insuficientes para a estátua", "barras": "Barras insuficientes"}},
 }
-TEMPO_OBRA = 8      # segundos até a obra ficar pronta
+LOTES = 16          # espaço da mina: cada fornalha ou depósito ocupa um lote
 INTERVALO = 5       # segundos entre as produções
 PRAZO_EXPEDICAO = 20      # segundos para a expedição voltar antes de se perder
 MINERIO_POR_SEGUNDO = 2   # carga que a expedição junta por segundo fora
@@ -33,16 +39,17 @@ ESTADO_INICIAL = {
     "producao_pedra": 10,     # pedras a cada INTERVALO
     "producao_minerio": 5,    # minérios a cada INTERVALO
     "intervalo": INTERVALO,
-    "tempo_obra": TEMPO_OBRA,
-    "custo_fornalha": CONSTRUCOES["fornalha"]["custo"],   # pedras
-    "custo_deposito": CONSTRUCOES["deposito"]["custo"],   # barras
+    "custos": {tipo: regra["custo"] for tipo, regra in CONSTRUCOES.items()},
+    "tempos": {tipo: regra["tempo"] for tipo, regra in CONSTRUCOES.items()},
     "fornalhas": 0,           # fornalhas prontas
     "depositos": 0,           # depósitos prontos (cada um deu +1 no limite)
     "em_obra": 0,             # obras em andamento, de qualquer tipo
+    "lotes": [None] * LOTES,  # None ou {"tipo": ..., "pronta": ...}: todas as telas desenham igual
+    "estatua": None,          # None, "obra" ou "pronta"
     "expedicoes": 0,          # expedições em andamento
     "rodada": 1,              # sobe a cada recomeço; temporizador de rodada velha não vale
 }
-estado = dict(ESTADO_INICIAL)
+estado = copy.deepcopy(ESTADO_INICIAL)
 ciclo_producao = 0            # sobe a cada abertura; só o laço de produção mais novo produz
 jogadores = {}                # sid -> {"nome": ..., "papel": ...}
 expedicoes = {}               # sid -> {"nome": ..., "saida": ...}; no máximo uma por jogador
@@ -51,7 +58,7 @@ expedicoes = {}               # sid -> {"nome": ..., "saida": ...}; no máximo u
 def fato(causa, **extras):
     """Monta o payload de um FATO: o estado atual, a CAUSA (o evento ou o
     temporizador que gerou o fato) e dados extras."""
-    return {"estado": dict(estado), "causa": causa, **extras}
+    return {"estado": copy.deepcopy(estado), "causa": causa, **extras}
 
 
 @sio.event
@@ -100,7 +107,7 @@ async def abrir_vila(sid, dados=None):
 
 
 # on construcao.solicitada: é um PEDIDO do Jogador; os dados dizem o tipo
-# ("fornalha" ou "deposito").
+# ("fornalha", "deposito" ou "estatua").
 @sio.on("construcao.solicitada")
 async def construir(sid, dados=None):
     pedido = "construcao.solicitada"
@@ -115,8 +122,12 @@ async def construir(sid, dados=None):
         motivo = "Construção desconhecida"
     elif estado["fase"] != "aberta":
         motivo = "A temporada não está aberta"
-    elif estado[regra["recurso"]] < regra["custo"]:
-        motivo = regra["falta"]
+    elif regra["usa_lote"] and None not in estado["lotes"]:
+        motivo = "Sem lote livre"
+    elif not regra["usa_lote"] and estado["estatua"] is not None:
+        motivo = "A estátua já foi começada"
+    elif any(estado[recurso] < qtd for recurso, qtd in regra["custo"].items()):
+        motivo = next(regra["falta"][recurso] for recurso, qtd in regra["custo"].items() if estado[recurso] < qtd)
     elif estado["mineiros"] >= estado["limite"]:
         motivo = "Sem mineiro livre"
     else:
@@ -126,13 +137,20 @@ async def construir(sid, dados=None):
         await recusar(sid, motivo, pedido)
         return
 
-    estado[regra["recurso"]] -= regra["custo"]
+    for recurso, qtd in regra["custo"].items():
+        estado[recurso] -= qtd
     estado["mineiros"] += 1
     estado["em_obra"] += 1
+    if regra["usa_lote"]:
+        lote = estado["lotes"].index(None)          # o primeiro lote livre
+        estado["lotes"][lote] = {"tipo": tipo, "pronta": False}
+    else:
+        lote = None                                  # a estátua vai para a praça
+        estado["estatua"] = "obra"
     nome = jogadores[sid]["nome"]
-    # emit para TODOS: o estoque e os mineiros mudaram para a vila inteira.
-    await sio.emit("construcao.iniciada", fato(pedido, por=nome, tipo=tipo))
-    sio.start_background_task(obra, nome, tipo, estado["rodada"])   # termina sozinha depois de TEMPO_OBRA
+    # emit para TODOS: o estoque, os mineiros e os lotes mudaram para a vila inteira.
+    await sio.emit("construcao.iniciada", fato(pedido, por=nome, tipo=tipo, lote=lote))
+    sio.start_background_task(obra, nome, tipo, lote, estado["rodada"])   # termina sozinha
 
 
 # Temporizador: fonte de eventos sem clique de ninguém. Use sio.sleep (e não
@@ -156,21 +174,31 @@ async def producao(ciclo):
         await sio.emit("recurso.produzido", fato("temporizador", barras_fundidas=fundidas))
 
 
-async def obra(nome, tipo, rodada):
-    await sio.sleep(TEMPO_OBRA)
+async def obra(nome, tipo, lote, rodada):
+    await sio.sleep(CONSTRUCOES[tipo]["tempo"])
     # Na pausa a obra termina normalmente; encerrada ou de uma rodada antiga, não.
     if estado["fase"] not in ("aberta", "pausada") or estado["rodada"] != rodada:
         return
     estado["mineiros"] -= 1
     estado["em_obra"] -= 1
+    if tipo == "estatua":
+        estado["estatua"] = "pronta"
+    else:
+        estado["lotes"][lote]["pronta"] = True
     if tipo == "fornalha":
         estado["fornalhas"] += 1          # passa a fundir barras na próxima produção
-    else:
+    elif tipo == "deposito":
         estado["depositos"] += 1
         estado["limite"] += 1             # o depósito abriga mais um mineiro
     # emit para TODOS: a obra ficou pronta e o mineiro voltou a ficar livre.
     causa = "construcao.iniciada (temporizador)"
-    await sio.emit("construcao.concluida", fato(causa, por=nome, tipo=tipo))
+    await sio.emit("construcao.concluida", fato(causa, por=nome, tipo=tipo, lote=lote))
+    if tipo == "estatua":
+        # A estátua é o objetivo final: a temporada termina com vitória. Mudar a
+        # fase para tudo, como no encerramento pelo Mestre.
+        estado["fase"] = "encerrada"
+        # emit para TODOS: um fato novo, causado pela conclusão da estátua.
+        await sio.emit("objetivo.cumprido", fato("construcao.concluida (estátua)", por=nome))
 
 
 # on vila.encerramento_solicitado: é um PEDIDO do Mestre para fechar a temporada.
@@ -219,7 +247,7 @@ async def reiniciar_vila(sid, dados=None):
         return
     rodada = estado["rodada"] + 1
     estado.clear()
-    estado.update(ESTADO_INICIAL, rodada=rodada)   # obras antigas conferem a rodada e não terminam
+    estado.update(copy.deepcopy(ESTADO_INICIAL), rodada=rodada)   # obras antigas conferem a rodada e não terminam
     expedicoes.clear()                             # prazos antigos não acham mais a expedição
     # emit para TODOS: a mina inteira voltou ao começo e todas as telas redesenham.
     await sio.emit("vila.reiniciada", fato(pedido))

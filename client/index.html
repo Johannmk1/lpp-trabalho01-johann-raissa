@@ -6,7 +6,7 @@
   <title>Mina em Tempo Real</title>
   <style>
     :root { color-scheme: dark; }
-    body { font-family: system-ui, sans-serif; max-width: 680px; margin: 24px auto; padding: 0 12px;
+    body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 24px auto; padding: 0 12px;
            background: #1a120d; color: #eadfd3; }
     h1 { margin: 8px 0; }
     .cartao { border: 1px solid #4a3a2e; border-radius: 10px; padding: 16px; margin: 12px 0; background: #241a14; }
@@ -71,6 +71,8 @@
         <span>🧱 {{ estado.barras }}</span>
         <span>⛏️ {{ estado.mineiros }}/{{ estado.limite }} <small>ocupados</small></span>
         <span>🔥 {{ estado.fornalhas }} · 📦 {{ estado.depositos }} · 🚧 {{ estado.em_obra }} · 🧭 {{ estado.expedicoes }}</span>
+        <span>🏗️ {{ estado.lotes.filter(Boolean).length }}/{{ estado.lotes.length }} lotes</span>
+        <span>🏆 {{ { obra: "estátua em obra", pronta: "estátua erguida!" }[estado.estatua] || "objetivo: estátua" }}</span>
       </div>
       <div id="jogo"></div>
     </div>
@@ -85,8 +87,9 @@
         <button v-if="estado.fase === 'encerrada'" @click="reiniciarVila">🔄 Começar do zero</button>
       </template>
       <template v-else>
-        <button @click="construir('fornalha')">🔥 Construir fornalha ({{ estado.custo_fornalha }} pedras)</button>
-        <button @click="construir('deposito')">📦 Construir depósito ({{ estado.custo_deposito }} barras)</button>
+        <button @click="construir('fornalha')">🔥 Construir fornalha ({{ estado.custos.fornalha.pedra }} pedras)</button>
+        <button @click="construir('deposito')">📦 Construir depósito ({{ estado.custos.deposito.barras }} barras)</button>
+        <button @click="construir('estatua')">🏆 Erguer estátua ({{ estado.custos.estatua.pedra }} pedras + {{ estado.custos.estatua.barras }} barras)</button>
         <button @click="enviarExpedicao">🧭 Enviar expedição</button>
         <button @click="chamarExpedicao">↩️ Chamar de volta</button>
       </template>
@@ -131,10 +134,10 @@
 
 <script>
   // =====================================================================
-  //  A MINA DESENHADA (Phaser). Toda a arte é feita por código, pixel a
-  //  pixel, em criarTexturas(): não há imagens de terceiros.
-  //  Cada método público reage a UM evento do servidor; quem chama é a
-  //  região ESCUTAS da aplicação, mais abaixo.
+  //  A MINA DESENHADA (Phaser). O chão usa o tileset do Kit Inicial
+  //  (client/assets/tileset-vila.png) e as construções são sprites em pixel
+  //  art (client/assets/sprites/). Cada método público reage a UM evento do
+  //  servidor; quem chama é a região ESCUTAS da aplicação, mais abaixo.
   // =====================================================================
   function criarJogo() {
     let cena = null;          // a cena, quando já estiver pronta
@@ -142,255 +145,234 @@
     const fila = [];          // chamadas feitas antes da cena existir
     const chamar = (nome, ...args) => (cena ? cena[nome](...args) : fila.push([nome, args]));
 
-    // ----- o mapa da mina (em pixels do mundo; a câmera dá zoom 3x) -----
-    const LARG = 240, ALT = 120, ZOOM = 3;
-    const ENTRADA = { x: 26, y: 26 };        // boca da mina: expedições entram e saem por aqui
-    const PATIO = { x: 70, y: 98 };          // onde os mineiros livres esperam, perto da fogueira
-    const PILHAS = {                          // onde o estoque aparece amontoado
-      pedra: { x: 58, y: 49, passo: 25, textura: "pedra" },
-      minerio: { x: 80, y: 49, passo: 10, textura: "minerio" },
-      barras: { x: 102, y: 51, passo: 2, textura: "barra" },
+    // ----- o mapa da mina, em tiles de 16 px -----
+    const T = 16, COLS = 30, LINHAS = 17, ZOOM = 2;
+    const LARG = COLS * T, ALT = LINHAS * T;
+    const TERRA = [[2, 3, 4, 6], [1, 5, 9, 8], [5, 9, 11, 10], [11, 2, 24, 15], [25, 6, 28, 10]];   // [x0, y0, x1, y1]
+    const AGUA = [[1, 13, 4, 15]];
+    const RESERVADO = [[0, 0, 7, 3], [5, 11, 10, 13]];       // a boca da mina e o pátio ficam sem árvores
+    const ENTRADA = { x: 48, y: 54 };                          // boca da mina: expedições entram e saem por aqui
+    const PILHAS = {                                           // o estoque amontoado no pátio de carga
+      pedra: { x: 72, y: 110, passo: 25, textura: "pedra" },
+      minerio: { x: 104, y: 110, passo: 10, textura: "minerio" },
+      barras: { x: 136, y: 112, passo: 2, textura: "barra" },
     };
-    const LOTES = [];                         // onde nascem as construções: 2 fileiras de 4
-    for (const y of [46, 97]) for (const x of [138, 166, 194, 222]) LOTES.push({ x, y });
+    const PATIO = { x: 104, y: 190 };                          // mineiros livres, ao lado da fogueira
+    const LOTES = [];                                          // 16 lotes em 4 x 4: centro de cada um
+    for (const y of [64, 112, 160, 208]) for (const x of [208, 256, 304, 352]) LOTES.push({ x, y });
+    const PRACA = { x: 432, y: 136 };                          // onde a estátua de ouro é erguida
+    const SPRITES = ["fornalha", "deposito", "canteiro", "estatua", "mineiro", "pedra", "minerio",
+                     "barra", "carrinho", "fogueira", "barril", "caixote", "lampiao"];
 
-    // Todas as texturas são desenhadas aqui, pixel a pixel (arte própria, sem imagens).
-    function criarTexturas(c) {
-      const g = c.make.graphics({ add: false });
-      const tex = (chave, w, h, desenho) => { g.clear(); desenho(); g.generateTexture(chave, w, h); };
-      const r = (cor, x, y, w, h, a = 1) => g.fillStyle(cor, a).fillRect(x, y, w, h);
+    const dentro = (x, y, rets) => rets.some(([x0, y0, x1, y1]) => x >= x0 && x <= x1 && y >= y0 && y <= y1);
 
-      tex("fornalha", 24, 28, () => {
-        r(0x000000, 2, 26, 21, 2, 0.35);                       // sombra
-        r(0x4f4a47, 15, 1, 6, 10); r(0x3a3633, 14, 0, 8, 2);    // chaminé
-        r(0x7a726c, 2, 9, 20, 17); r(0x8d847d, 1, 8, 22, 2);    // corpo e laje
-        for (let i = 0; i < 4; i++) {                           // tijolos
-          r(0x5e5752, 2, 12 + i * 4, 20, 1);
-          for (let x = i % 2 ? 5 : 8; x < 22; x += 6) r(0x5e5752, x, 9 + i * 4, 1, 3);
+    // Monta o chão e a decoração a partir das áreas acima. Caminho e água usam
+    // a regra do kit: número = base + soma dos vizinhos iguais (N=1, L=2, S=4, O=8).
+    function montarMapa(sorte) {
+      const chao = [], deco = [];
+      const igual = (rets, x, y) => x >= 0 && y >= 0 && x < COLS && y < LINHAS && dentro(x, y, rets);
+      for (let y = 0; y < LINHAS; y++) {
+        chao.push([]); deco.push([]);
+        for (let x = 0; x < COLS; x++) {
+          const viz = (rets) => (igual(rets, x, y - 1) ? 1 : 0) + (igual(rets, x + 1, y) ? 2 : 0)
+            + (igual(rets, x, y + 1) ? 4 : 0) + (igual(rets, x - 1, y) ? 8 : 0);
+          const grama = !dentro(x, y, TERRA) && !dentro(x, y, AGUA);
+          chao[y].push(dentro(x, y, TERRA) ? 8 + viz(TERRA) : dentro(x, y, AGUA) ? 24 + viz(AGUA) : sorte.pick([0, 0, 0, 1, 1, 2]));
+          let enfeite = -1;
+          if (grama && !dentro(x, y, RESERVADO)) {
+            const borda = y === 0 || y === LINHAS - 1 || x === 0 || x === COLS - 1;
+            if (borda && sorte.frac() < 0.85) enfeite = 40;                                   // árvore
+            else if (!borda && sorte.frac() < 0.12) enfeite = sorte.pick([40, 41, 42, 42, 43]);
+          }
+          deco[y].push(enfeite);
         }
-        r(0x1a0d08, 7, 15, 10, 11); r(0x1a0d08, 8, 14, 8, 1);   // boca
-      });
-      tex("brasa", 8, 7, () => { r(0xff6a00, 0, 1, 8, 6); r(0xffc233, 2, 3, 4, 4); r(0xfff1a8, 3, 5, 2, 2); });
-      tex("fumaca", 4, 4, () => { g.fillStyle(0xb8b0a8, 1).fillCircle(2, 2, 2); });
-      tex("deposito", 26, 25, () => {
-        r(0x000000, 2, 23, 23, 2, 0.35);
-        g.fillStyle(0x6b3f1f, 1).fillTriangle(0, 10, 13, 1, 26, 10);   // telhado
-        r(0x52301a, 1, 9, 24, 2);
-        r(0x9a6a3a, 3, 11, 20, 12);                                     // paredes de tábua
-        for (const x of [7, 11, 15, 19]) r(0x7d5530, x, 11, 1, 12);
-        r(0x3b2414, 10, 15, 6, 8); r(0xd9b36c, 14, 19, 1, 1);           // porta
-        r(0xb0803f, 19, 17, 7, 6); r(0x7a5228, 19, 17, 7, 1);           // caixote
-        r(0x7a5228, 19, 22, 7, 1); r(0x7a5228, 22, 17, 1, 6);
-      });
-      tex("canteiro", 24, 22, () => {
-        r(0x000000, 2, 20, 20, 2, 0.3);
-        r(0x8b5a2b, 3, 3, 2, 18); r(0x8b5a2b, 19, 3, 2, 18);            // postes
-        r(0xa87443, 1, 6, 22, 2); r(0xa87443, 1, 13, 22, 2);            // tábuas
-        for (let i = 0; i < 6; i++) r(0x7a4f26, 6 + i * 2, 8 + i, 2, 1); // escora
-        g.fillStyle(0x6a625c, 1).fillCircle(8, 19, 3).fillCircle(14, 20, 2); // pedras da obra
-      });
-      tex("mineiro", 8, 12, () => {
-        r(0xf2c12e, 2, 0, 4, 2); r(0xf2c12e, 1, 2, 6, 1); r(0xfff6c0, 3, 1, 2, 1); // capacete e lanterna
-        r(0xe2b48c, 2, 3, 4, 3); r(0x2a1a10, 3, 4, 1, 1); r(0x2a1a10, 5, 4, 1, 1); // rosto
-        r(0x3b6ea5, 1, 6, 6, 3); r(0x5a3b1e, 1, 8, 6, 1);                         // roupa e cinto
-        r(0x3a2a1e, 2, 9, 1, 3); r(0x3a2a1e, 5, 9, 1, 3);                         // pernas
-      });
-      tex("pedra", 6, 5, () => { r(0x8f8f8f, 1, 1, 4, 4); r(0x8f8f8f, 0, 2, 6, 2); r(0xc4c4c4, 1, 1, 2, 1); r(0x5f5f5f, 1, 4, 4, 1); });
-      tex("minerio", 6, 5, () => {
-        r(0x6e4630, 1, 1, 4, 4); r(0x6e4630, 0, 2, 6, 2); r(0x4a2e1e, 1, 4, 4, 1);
-        r(0xf0a040, 1, 2, 1, 1); r(0xf0a040, 4, 1, 1, 1); r(0xffd27a, 3, 3, 1, 1);
-      });
-      tex("barra", 8, 4, () => { r(0xd88a2b, 0, 1, 8, 3); r(0xf6c46a, 1, 0, 6, 1); r(0xa8601a, 0, 3, 8, 1); });
-      tex("carrinho", 12, 9, () => { r(0x5a5a5a, 0, 1, 12, 5); r(0x7a7a7a, 0, 1, 12, 1); r(0x8f8f8f, 2, 0, 3, 1); r(0x1e1e1e, 2, 6, 3, 3); r(0x1e1e1e, 7, 6, 3, 3); });
-      tex("tocha", 3, 8, () => { r(0x6b4a2b, 1, 3, 1, 5); r(0xffb300, 0, 0, 3, 3); r(0xfff3b0, 1, 1, 1, 1); });
-      tex("barril", 7, 9, () => {
-        r(0x000000, 0, 8, 7, 1, 0.3); r(0x8a5a2e, 0, 1, 7, 7); r(0xa8703a, 1, 0, 5, 1);
-        r(0x4a4a4a, 0, 2, 7, 1); r(0x4a4a4a, 0, 6, 7, 1); r(0x6e4422, 2, 1, 1, 7);
-      });
-      tex("caixote", 8, 8, () => {
-        r(0x000000, 0, 7, 8, 1, 0.3); r(0xb0803f, 0, 0, 8, 7); r(0x7a5228, 0, 0, 8, 1);
-        r(0x7a5228, 0, 6, 8, 1); r(0x7a5228, 0, 0, 1, 7); r(0x7a5228, 7, 0, 1, 7);
-        for (let i = 1; i < 6; i++) r(0x8a6030, i, i, 1, 1);
-      });
-      tex("lampiao", 5, 14, () => {
-        r(0x5a3b22, 2, 4, 1, 10); r(0x5a3b22, 0, 13, 5, 1);
-        r(0x3a3a3a, 1, 0, 3, 1); r(0xffd36b, 1, 1, 3, 3); r(0x3a3a3a, 1, 4, 3, 1);
-      });
-      tex("fogueira", 12, 9, () => {
-        r(0x6b4a2b, 0, 7, 12, 2); r(0x5a3b22, 2, 6, 8, 1);
-        r(0xff6a00, 3, 2, 6, 5); r(0xffc233, 4, 3, 4, 4); r(0xfff1a8, 5, 4, 2, 2); r(0xff6a00, 5, 0, 2, 2);
-      });
-      tex("cristal", 5, 7, () => { r(0x5fd3e8, 1, 1, 3, 6); r(0xb8f4ff, 2, 0, 1, 3); r(0x2f8fa3, 3, 3, 1, 4); });
-      g.destroy();
+      }
+      return { chao, deco };
     }
 
     class MinaScene extends Phaser.Scene {
       constructor() { super("mina"); }
 
+      preload() {
+        this.load.image("tiles", "assets/tileset-vila.png");                    // peças do kit
+        for (const nome of SPRITES) this.load.image(nome, "assets/sprites/" + nome + ".png");
+      }
+
       create() {
-        if (!this.textures.exists("fornalha")) criarTexturas(this);
+        const sorte = new Phaser.Math.RandomDataGenerator(["mina"]);          // a mesma mina em todas as telas
+        this.sorte = sorte;
+        const { chao, deco } = montarMapa(sorte);
+        for (const dados of [chao, deco]) {
+          const mapa = this.make.tilemap({ data: dados, tileWidth: T, tileHeight: T });
+          mapa.createLayer(0, mapa.addTilesetImage("tiles"), 0, 0);
+        }
         this.cameras.main.setZoom(ZOOM).centerOn(LARG / 2, ALT / 2);
         this.desenharCenario();
 
-        this.obras = [];       // obras em andamento (a primeira a começar é a primeira a terminar)
-        this.usados = 0;       // quantos lotes já foram ocupados
+        this.obras = {};       // obras em andamento, pelo lote (ou "praca")
         this.pilhas = {};      // sprites de cada pilha de estoque
-        this.livres = [];      // sprites dos mineiros livres no pátio
-        this.sombra = this.add.rectangle(LARG / 2, ALT / 2, LARG, ALT, 0x000000, 0.3).setDepth(300);
-        this.faixa = this.add.text(LARG / 2 + 20, 7, "⏳ Aguardando o Mestre", {
-          fontSize: "6px", color: "#f3e6d8", backgroundColor: "#000000aa",
-          padding: { x: 4, y: 1 }, resolution: 6,
-        }).setOrigin(0.5).setDepth(400);
+        this.livres = [];      // mineiros livres no pátio
+        this.sombra = this.add.rectangle(LARG / 2, ALT / 2, LARG, ALT, 0x10183a, 0.25).setDepth(900);
+        this.faixa = this.add.text(LARG / 2 + 40, 9, "⏳ Aguardando o Mestre", {
+          fontSize: "9px", fontStyle: "bold", color: "#fff6e0", backgroundColor: "#000000b0",
+          padding: { x: 5, y: 2 }, resolution: ZOOM * 2,
+        }).setOrigin(0.5).setDepth(1000);
 
         cena = this;
         fila.splice(0).forEach(([nome, args]) => this[nome](...args));
       }
 
-      // ----- cenário fixo: chão, parede de rocha, boca da mina, trilhos e lotes -----
+      // ----- cenário fixo: morro com a boca da mina, trilho, pátio, lotes e praça -----
       desenharCenario() {
-        const sorte = new Phaser.Math.RandomDataGenerator(["mina"]);   // a mesma mina em todas as telas
-        const g = this.add.graphics();
-        const brilho = (x, y, raio) => {      // luz quente em volta de fogo e lampião
-          const luz = this.add.circle(x, y, raio, 0xffa040, 0.13).setBlendMode(Phaser.BlendModes.ADD).setDepth(250);
-          this.tweens.add({ targets: luz, alpha: 0.7, scale: 0.94, duration: 300 + sorte.between(0, 200), yoyo: true, repeat: -1 });
-        };
-
-        g.fillStyle(0x4a3628).fillRect(0, 0, LARG, ALT);                  // chão de terra
-        for (let i = 0; i < 520; i++) {
-          g.fillStyle(sorte.pick([0x553f2f, 0x3f2e22, 0x5c4534, 0x463426]));
-          g.fillRect(sorte.between(0, LARG), sorte.between(16, ALT), sorte.pick([1, 1, 2]), 1);
+        const sorte = this.sorte;
+        const g = this.add.graphics().setDepth(1);
+        // morro de rocha com a boca da mina
+        g.fillStyle(0x4d443c).fillPoints([{ x: 0, y: 0 }, { x: 112, y: 0 }, { x: 116, y: 30 }, { x: 98, y: 56 }, { x: 70, y: 62 }, { x: 22, y: 62 }, { x: 0, y: 54 }], true);
+        g.fillStyle(0x6b6158).fillPoints([{ x: 0, y: 0 }, { x: 108, y: 0 }, { x: 110, y: 26 }, { x: 92, y: 48 }, { x: 66, y: 54 }, { x: 24, y: 54 }, { x: 0, y: 46 }], true);
+        for (let i = 0; i < 70; i++) {
+          g.fillStyle(sorte.pick([0x7d7369, 0x5c534b, 0x857a70])).fillRect(sorte.between(2, 104), sorte.between(2, 48), sorte.pick([2, 3]), sorte.pick([1, 2]));
         }
-        g.fillStyle(0x5e4836).fillRect(16, 26, 20, 94).fillRect(16, 69, LARG, 9);   // caminhos batidos
-        g.fillStyle(0x6a5240);
-        for (let i = 0; i < 90; i++) g.fillRect(sorte.between(16, LARG), sorte.between(69, 77), 1, 1);
-
-        g.fillStyle(0x2a1d14).fillRect(0, 0, LARG, 14);                    // parede de rocha
-        for (let x = -4; x < LARG; x += 6) {
-          g.fillStyle(sorte.pick([0x33251b, 0x3d2d21, 0x2e2118]))
-            .fillCircle(x + sorte.between(0, 3), sorte.between(12, 17), sorte.between(3, 6));
+        g.fillStyle(0x1a1410).fillRect(36, 30, 24, 28).fillRect(38, 27, 20, 3);                // boca escura
+        g.fillStyle(0x0d0a08).fillRect(40, 34, 16, 24);
+        g.fillStyle(0x7a5230).fillRect(33, 26, 4, 32).fillRect(59, 26, 4, 32).fillRect(31, 23, 34, 4);
+        g.fillStyle(0x4f341d).fillRect(31, 26, 34, 1).fillRect(36, 26, 1, 32).fillRect(62, 26, 1, 32);
+        for (const [x, y] of [[14, 50], [96, 50], [104, 38], [6, 40], [82, 56], [24, 56]]) this.add.image(x, y, "pedra").setDepth(2);
+        // trilho saindo da mina até o pátio de carga
+        g.fillStyle(0x5a3b22);
+        for (let y = 56; y < 104; y += 4) g.fillRect(41, y, 14, 2);
+        g.fillStyle(0xa8a8a8).fillRect(43, 56, 1, 48).fillRect(52, 56, 1, 48);
+        this.add.image(48, 98, "carrinho").setDepth(98);
+        // pátio de carga: tablado de madeira com as pilhas
+        g.fillStyle(0x7a5a3a).fillRect(58, 92, 96, 26);
+        g.fillStyle(0x684a2e);
+        for (let x = 58; x < 154; x += 8) g.fillRect(x, 92, 1, 26);
+        g.fillStyle(0x4a3420).fillRect(58, 118, 96, 2);
+        const rotulo = { fontSize: "7px", fontStyle: "bold", color: "#fff6e0", stroke: "#3a2818", strokeThickness: 3, resolution: ZOOM * 2 };
+        this.add.text(PILHAS.pedra.x, 123, "pedra", rotulo).setOrigin(0.5, 0).setDepth(5);
+        this.add.text(PILHAS.minerio.x, 123, "minério", rotulo).setOrigin(0.5, 0).setDepth(5);
+        this.add.text(PILHAS.barras.x, 123, "barras", rotulo).setOrigin(0.5, 0).setDepth(5);
+        this.add.image(26, 106, "barril").setDepth(106);
+        this.add.image(36, 110, "barril").setDepth(110);
+        this.add.image(164, 112, "caixote").setDepth(112);
+        // pátio dos mineiros, com fogueira
+        const fogo = this.add.image(PATIO.x - 30, PATIO.y + 4, "fogueira").setOrigin(0.5, 1).setDepth(PATIO.y + 4);
+        this.tweens.add({ targets: fogo, scaleY: 0.92, duration: 180, yoyo: true, repeat: -1 });
+        this.brilho(PATIO.x - 30, PATIO.y - 4, 22);
+        // estacas marcando os 16 lotes
+        for (const { x, y } of LOTES) {
+          g.fillStyle(0x000000, 0.12).fillRect(x - 15, y - 15, 30, 30);
+          g.fillStyle(0x6b4423);
+          for (const [dx, dy] of [[-15, -15], [13, -15], [-15, 12], [13, 12]]) g.fillRect(x + dx, y + dy, 2, 3);
         }
-        for (let i = 0; i < 26; i++) {                                     // veios de minério na rocha
-          g.fillStyle(sorte.pick([0xd9822b, 0xf0a040, 0xb86a22]))
-            .fillRect(sorte.between(46, LARG - 4), sorte.between(2, 13), sorte.pick([1, 2]), 1);
+        // praça: a silhueta da estátua mostra o objetivo final
+        g.fillStyle(0x8a8078).fillRect(PRACA.x - 26, PRACA.y - 6, 52, 34);
+        g.fillStyle(0x9a9088);
+        for (let i = 0; i < 26; i++) g.fillRect(PRACA.x - 26 + sorte.between(0, 50), PRACA.y - 6 + sorte.between(0, 32), 3, 2);
+        this.fantasma = this.add.image(PRACA.x, PRACA.y + 22, "estatua").setOrigin(0.5, 1).setAlpha(0.28).setTint(0x000000).setDepth(PRACA.y);
+        this.add.text(PRACA.x, PRACA.y + 25, "objetivo", rotulo).setOrigin(0.5, 0).setDepth(5);
+        // lampiões nos cantos do pátio de obras
+        for (const [x, y] of [[166, 44], [410, 44], [166, 250], [410, 250]]) {
+          this.add.image(x, y, "lampiao").setOrigin(0.5, 1).setDepth(y);
+          this.brilho(x + 3, y - 18, 12);
         }
-        for (const x of [70, 118, 176, 214]) this.add.image(x, 9, "cristal");
-
-        g.fillStyle(0x0b0705).fillRect(15, 4, 22, 23);                     // boca da mina
-        g.fillStyle(0x140d09).fillRect(17, 6, 18, 21);
-        g.fillStyle(0x7a5230).fillRect(12, 3, 4, 25).fillRect(36, 3, 4, 25).fillRect(10, 1, 32, 4);
-        g.fillStyle(0x5a3b22).fillRect(10, 4, 32, 1);
-        for (const x of [7, 45]) {                                         // tochas na entrada
-          const tocha = this.add.image(x, 13, "tocha");
-          this.tweens.add({ targets: tocha, alpha: 0.65, duration: 150, yoyo: true, repeat: -1, delay: sorte.between(0, 200) });
-          brilho(x, 11, 12);
-        }
-
-        g.fillStyle(0x5a3b22);                                             // dormentes
-        for (let y = 27; y < 110; y += 4) g.fillRect(17, y, 18, 2);
-        for (let x = 36; x < LARG; x += 4) g.fillRect(x, 106, 2, 12);
-        g.fillStyle(0xa0a0a0).fillRect(20, 27, 1, 85).fillRect(31, 27, 1, 81)   // trilhos
-          .fillRect(31, 108, LARG, 1).fillRect(20, 115, LARG, 1);
-        this.add.image(26, 92, "carrinho").setDepth(92);
-
-        g.fillStyle(0x5a4030).fillRect(44, 36, 70, 22);                   // tablado do estoque
-        g.fillStyle(0x4a3424);
-        for (let x = 44; x < 114; x += 7) g.fillRect(x, 36, 1, 22);
-        g.fillStyle(0x3a2818).fillRect(44, 58, 70, 2);
-        const rotulo = { fontSize: "4px", color: "#d8c8b8", resolution: 6 };
-        this.add.text(58, 62, "pedra", rotulo).setOrigin(0.5, 0);
-        this.add.text(80, 62, "minério", rotulo).setOrigin(0.5, 0);
-        this.add.text(102, 62, "barras", rotulo).setOrigin(0.5, 0);
-        this.add.image(40, 52, "barril").setDepth(52);
-        this.add.image(118, 54, "caixote").setDepth(54);
-
-        for (const { x, y } of LOTES) {                                     // lotes com borda de pedra
-          g.fillStyle(0x3e2d21).fillRect(x - 12, y - 11, 24, 22);
-          g.fillStyle(0x7a6f66);
-          for (let i = 0; i < 24; i += 3) { g.fillRect(x - 12 + i, y - 12, 2, 1); g.fillRect(x - 12 + i, y + 11, 2, 1); }
-          for (let i = 0; i < 22; i += 3) { g.fillRect(x - 13, y - 11 + i, 1, 2); g.fillRect(x + 12, y - 11 + i, 1, 2); }
-        }
-
-        const fogo = this.add.image(PATIO.x - 18, PATIO.y + 2, "fogueira").setDepth(PATIO.y);   // fogueira do pátio
-        this.tweens.add({ targets: fogo, scaleY: 0.9, duration: 200, yoyo: true, repeat: -1 });
-        brilho(PATIO.x - 18, PATIO.y, 16);
-        for (const x of [124, 236]) { this.add.image(x, 66, "lampiao").setDepth(66); brilho(x, 61, 10); }
-        this.add.image(110, 100, "barril").setDepth(100);
-        this.add.image(116, 102, "caixote").setDepth(102);
-        for (const [x, y] of [[8, 40], [6, 70], [10, 104], [112, 26], [126, 84], [234, 84]]) {   // pedras soltas
-          g.fillStyle(0x6a625c).fillCircle(x, y, 2).fillStyle(0x8a827c).fillRect(x - 1, y - 2, 2, 1);
-        }
+        this.brilho(ENTRADA.x, ENTRADA.y - 10, 12);                  // luz saindo da mina
       }
 
       // ----- apoio -----
-      lote(i) { return LOTES[i % LOTES.length]; }
-      mineiro(x, y) { return this.add.image(x, y, "mineiro").setDepth(y); }
-      criarConstrucao(lote, tipo, animar) {
-        const { x, y } = lote;
-        const sprite = this.add.image(x, y, tipo === "deposito" ? "deposito" : "fornalha").setDepth(y);
-        if (animar) this.tweens.add({ targets: sprite, scale: { from: 0.3, to: 1 }, duration: 400, ease: "Back.Out" });
-        if (tipo === "deposito") return;
-        const brasa = this.add.image(x, y + 6, "brasa").setDepth(y + 1);   // fogo aceso na boca
-        this.tweens.add({ targets: brasa, alpha: 0.45, duration: 220, yoyo: true, repeat: -1 });
-        this.time.addEvent({ delay: 900, loop: true, startAt: Phaser.Math.Between(0, 900), callback: () => {
-          const f = this.add.image(x + 6, y - 14, "fumaca").setDepth(200).setAlpha(0.7);
-          this.tweens.add({ targets: f, y: y - 30, x: x + 9, alpha: 0, scale: 2, duration: 1600, onComplete: () => f.destroy() });
-        } });
+      brilho(x, y, raio) {                     // luz quente: aparece mais à noite (acima da sombra)
+        const luz = this.add.circle(x, y, raio, 0xffa040, 0.16).setBlendMode(Phaser.BlendModes.ADD).setDepth(950);
+        this.tweens.add({ targets: luz, alpha: 0.6, scale: 0.92, duration: 280 + this.sorte.between(0, 200), yoyo: true, repeat: -1 });
+        return luz;
       }
-      criarObra(duracao) {
-        const lote = this.lote(this.usados++);
-        const { x, y } = lote;
-        const canteiro = this.add.image(x, y, "canteiro").setDepth(y);
-        const operario = this.mineiro(x - 12, y + 4);
-        this.tweens.add({ targets: operario, y: y + 2, duration: 180, yoyo: true, repeat: -1 });  // martelando
-        const fundo = this.add.rectangle(x - 10, y + 15, 20, 2, 0x111111).setOrigin(0, 0.5).setDepth(y + 1);
-        const barra = this.add.rectangle(x - 10, y + 15, 20, 2, 0xffc233).setOrigin(0, 0.5).setDepth(y + 1);
+      lugar(lote) { return lote === null || lote === undefined ? PRACA : LOTES[lote]; }
+      mineiro(x, y) { return this.add.image(x, y, "mineiro").setOrigin(0.5, 1).setDepth(y); }
+      criarConstrucao(lote, tipo, animar) {
+        const { x, y } = this.lugar(lote);
+        const base = tipo === "estatua" ? y + 22 : y + 15;
+        const sprite = this.add.image(x, base, tipo).setOrigin(0.5, 1).setDepth(base);
+        if (animar) this.tweens.add({ targets: sprite, scale: { from: 0.3, to: 1 }, duration: 450, ease: "Back.Out" });
+        if (tipo === "fornalha") {
+          this.brilho(x - 9, base - 9, 9);                                    // fogo aceso na boca
+          this.time.addEvent({ delay: 1100, loop: true, startAt: this.sorte.between(0, 1100), callback: () => {
+            const f = this.add.circle(x + 3, base - 36, 2, 0xc8c0b8, 0.8).setDepth(base + 1);
+            this.tweens.add({ targets: f, y: base - 54, x: x + 7, alpha: 0, scale: 2.2, duration: 1800, onComplete: () => f.destroy() });
+          } });
+        }
+        if (tipo === "estatua") {
+          this.fantasma.setVisible(false);
+          this.time.addEvent({ delay: 400, loop: true, callback: () => {   // brilho de ouro
+            const b = this.add.rectangle(x + this.sorte.between(-10, 10), base - this.sorte.between(10, 40), 2, 2, 0xfff3a0).setDepth(base + 1);
+            this.tweens.add({ targets: b, alpha: 0, scale: 0.2, duration: 700, onComplete: () => b.destroy() });
+          } });
+        }
+      }
+      criarObra(lote, tipo, duracao) {
+        const { x, y } = this.lugar(lote);
+        const base = tipo === "estatua" ? y + 22 : y + 15;
+        if (tipo === "estatua") this.fantasma.setVisible(false);
+        const canteiro = this.add.image(x, base, "canteiro").setOrigin(0.5, 1).setDepth(base);
+        const operario = this.mineiro(x - 18, base);
+        this.tweens.add({ targets: operario, y: base - 2, duration: 180, yoyo: true, repeat: -1 });   // martelando
+        const fundo = this.add.rectangle(x - 13, base + 3, 26, 3, 0x1a1a1a).setOrigin(0, 0.5).setDepth(base + 1);
+        const barra = this.add.rectangle(x - 13, base + 3, 26, 3, 0xffc233).setOrigin(0, 0.5).setDepth(base + 1);
         barra.scaleX = 0;
         this.tweens.add({ targets: barra, scaleX: 1, duration: duracao });
-        this.obras.push({ lote, partes: [canteiro, operario, fundo, barra] });
+        this.obras[lote ?? "praca"] = [canteiro, operario, fundo, barra];
       }
       flutuar(texto, x, y, cor) {
         const t = this.add.text(x, y, texto, {
-          fontSize: "5px", color: cor, fontStyle: "bold", stroke: "#1a120d",
-          strokeThickness: 2, resolution: 6,
-        }).setOrigin(0.5).setDepth(350);
+          fontSize: "8px", fontStyle: "bold", color: cor, stroke: "#1a120d", strokeThickness: 3, resolution: ZOOM * 2,
+        }).setOrigin(0.5).setDepth(1100);
         t.x = Phaser.Math.Clamp(x, t.width / 2 + 2, LARG - t.width / 2 - 2);   // não corta na borda
-        this.tweens.add({ targets: t, y: y - 16, alpha: 0, duration: 1600, onComplete: () => t.destroy() });
+        this.tweens.add({ targets: t, y: y - 18, alpha: 0, duration: 1700, onComplete: () => t.destroy() });
       }
       andar(sprite, destino, duracao, depois) {
         this.tweens.add({ targets: sprite, x: destino.x, y: destino.y, duration: duracao, onComplete: depois });
-        this.tweens.add({ targets: sprite, angle: { from: -6, to: 6 }, duration: 140, yoyo: true, repeat: duracao / 280 });
+        this.tweens.add({ targets: sprite, angle: { from: -6, to: 6 }, duration: 140, yoyo: true, repeat: Math.floor(duracao / 280) });
       }
 
       // O estoque e os mineiros livres acompanham o estado: chamado a cada fato recebido.
       estoque(estado) {
         for (const [chave, p] of Object.entries(PILHAS)) {
-          const qtd = Math.min(12, Math.ceil(estado[chave] / p.passo));
+          const qtd = Math.min(15, Math.ceil(estado[chave] / p.passo));
           const atual = this.pilhas[chave] || [];
           if (atual.length === qtd) continue;
           atual.forEach((s) => s.destroy());
-          this.pilhas[chave] = Array.from({ length: qtd }, (_, i) =>
-            this.add.image(p.x + (i % 4) * 5 - 7, p.y - Math.floor(i / 4) * 3, p.textura).setDepth(p.y));
+          const fileiras = [5, 4, 3, 2, 1];                                   // pirâmide de baixo para cima
+          this.pilhas[chave] = [];
+          for (let i = 0, f = 0, n = 0; i < qtd; i++, n++) {
+            if (n === fileiras[f]) { f++; n = 0; }
+            const x = p.x + (n - (fileiras[f] - 1) / 2) * 6, y = p.y - f * 4;
+            this.pilhas[chave].push(this.add.image(x, y, p.textura).setDepth(p.y + f));
+          }
         }
         const livres = Math.max(0, estado.limite - estado.mineiros);
         if (this.livres.length !== livres) {
           this.livres.forEach((s) => { this.tweens.killTweensOf(s); s.destroy(); });
-          this.livres = Array.from({ length: livres }, (_, i) => {
-            const s = this.mineiro(PATIO.x + i * 10 - (livres - 1) * 5, PATIO.y);
-            this.tweens.add({ targets: s, y: PATIO.y - 1, duration: 500 + i * 70, yoyo: true, repeat: -1 });
-            return s;
-          });
+          this.livres = [];
+          for (let i = 0; i < Math.min(livres, 12); i++) {                     // até 12 desenhados, 6 por fileira
+            const x = PATIO.x + (i % 6) * 13, y = PATIO.y + Math.floor(i / 6) * 18;
+            const s = this.mineiro(x, y);
+            this.tweens.add({ targets: s, y: y - 1, duration: 480 + i * 60, yoyo: true, repeat: -1 });
+            this.livres.push(s);
+          }
+          if (livres > 12) this.livres.push(this.add.text(PATIO.x + 78, PATIO.y + 8, "+" + (livres - 12), {
+            fontSize: "8px", fontStyle: "bold", color: "#fff6e0", stroke: "#1a120d", strokeThickness: 3, resolution: ZOOM * 2,
+          }).setDepth(PATIO.y + 20));
         }
       }
 
       // ----- um método para cada evento do servidor -----
       mostrarEstado(estado) {                 // estado.sincronizado e vila.reiniciada
-        for (let i = 0; i < estado.fornalhas; i++) this.criarConstrucao(this.lote(this.usados++), "fornalha");
-        for (let i = 0; i < estado.depositos; i++) this.criarConstrucao(this.lote(this.usados++), "deposito");
-        for (let i = 0; i < estado.em_obra; i++) this.criarObra(estado.tempo_obra * 1000);
+        estado.lotes.forEach((l, i) => {
+          if (l) l.pronta ? this.criarConstrucao(i, l.tipo) : this.criarObra(i, l.tipo, estado.tempos[l.tipo] * 1000);
+        });
+        if (estado.estatua === "obra") this.criarObra(null, "estatua", estado.tempos.estatua * 1000);
+        if (estado.estatua === "pronta") this.criarConstrucao(null, "estatua");
         this.estoque(estado);
         if (estado.fase === "aberta") this.vilaIniciada();
         if (estado.fase === "pausada") this.vilaPausada();
-        if (estado.fase === "encerrada") this.vilaEncerrada();
+        if (estado.fase === "encerrada") estado.estatua === "pronta" ? this.vitoria() : this.vilaEncerrada();
       }
       vilaIniciada() {                        // vila.iniciada
         this.faixa.setText("⛏️ Temporada aberta");
@@ -398,56 +380,65 @@
       }
       vilaPausada() {                         // vila.pausada
         this.faixa.setText("⏸️ Temporada pausada");
-        this.sombra.setFillStyle(0x1a1a2a, 0.35);
+        this.sombra.setFillStyle(0x202030, 0.35);
       }
       vilaEncerrada() {                       // vila.encerrada
         this.faixa.setText("🌙 Temporada encerrada");
-        this.sombra.setFillStyle(0x000022, 0.55);
+        this.sombra.setFillStyle(0x0a1030, 0.55);
       }
-      obraIniciada(estado, tipo) {            // construcao.iniciada
-        this.criarObra(estado.tempo_obra * 1000);
-        const pilha = tipo === "deposito" ? PILHAS.barras : PILHAS.pedra;
-        const gasto = tipo === "deposito" ? estado.custo_deposito + " 🧱" : estado.custo_fornalha + " 🪨";
-        this.flutuar("-" + gasto, pilha.x, pilha.y - 8, "#ff8a80");
+      vitoria(por) {                          // objetivo.cumprido
+        this.faixa.setText("🏆 Estátua de ouro erguida! Vitória!");
+        this.sombra.setFillStyle(0x3a2a00, 0.15);
+        this.cameras.main.flash(500, 255, 220, 120);
+        if (por) this.flutuar("🏆 " + por + " ergueu a estátua!", PRACA.x - 30, PRACA.y - 40, "#ffe27a");
       }
-      obraConcluida(estado, tipo) {           // construcao.concluida
-        const obra = this.obras.shift();
-        if (!obra) return;
-        obra.partes.forEach((p) => { this.tweens.killTweensOf(p); p.destroy(); });
-        this.criarConstrucao(obra.lote, tipo, true);
-        this.flutuar(tipo === "deposito" ? "📦 Depósito pronto! +1 ⛏️" : "🔥 Fornalha acesa!",
-          obra.lote.x, obra.lote.y - 18, "#9be59b");
+      obraIniciada(estado, tipo, lote) {      // construcao.iniciada
+        this.criarObra(lote, tipo, estado.tempos[tipo] * 1000);
+        for (const [recurso, qtd] of Object.entries(estado.custos[tipo])) {
+          const p = PILHAS[recurso];
+          this.flutuar("-" + qtd, p.x, p.y - 14, "#ff8a80");
+        }
+      }
+      obraConcluida(estado, tipo, lote) {     // construcao.concluida
+        const partes = this.obras[lote ?? "praca"];
+        if (!partes) return;
+        delete this.obras[lote ?? "praca"];
+        partes.forEach((p) => { this.tweens.killTweensOf(p); p.destroy(); });
+        this.criarConstrucao(lote, tipo, true);
+        const { x, y } = this.lugar(lote);
+        const texto = { fornalha: "🔥 Fornalha acesa!", deposito: "📦 Depósito pronto! +1 mineiro", estatua: "🏆 Estátua pronta!" }[tipo];
+        this.flutuar(texto, x, y - 26, "#9be59b");
       }
       recursoProduzido(estado, fundidas) {    // recurso.produzido
-        const carrinho = this.add.image(35, 34, "carrinho").setDepth(150);   // a produção sai da mina pelos trilhos
-        this.tweens.add({ targets: carrinho, y: 100, duration: 900, onComplete: () => carrinho.destroy() });
-        this.flutuar("+" + estado.producao_pedra + " 🪨", PILHAS.pedra.x, PILHAS.pedra.y - 8, "#e0e0e0");
-        this.flutuar("+" + estado.producao_minerio + " ⛰️", PILHAS.minerio.x, PILHAS.minerio.y - 8, "#ffcc80");
-        if (fundidas) this.flutuar("+" + fundidas + " 🧱", PILHAS.barras.x, PILHAS.barras.y - 8, "#ffd180");
+        const carrinho = this.add.image(48, 56, "carrinho").setDepth(99);   // a produção sai da mina pelo trilho
+        this.tweens.add({ targets: carrinho, y: 98, duration: 900, onComplete: () => carrinho.destroy() });
+        this.flutuar("+" + estado.producao_pedra, PILHAS.pedra.x, PILHAS.pedra.y - 16, "#e8e8e8");
+        this.flutuar("+" + estado.producao_minerio, PILHAS.minerio.x, PILHAS.minerio.y - 16, "#ffcc80");
+        if (fundidas) this.flutuar("+" + fundidas, PILHAS.barras.x, PILHAS.barras.y - 16, "#ffe27a");
       }
       expedicaoIniciada(por) {                // expedicao.iniciada
         const m = this.mineiro(PATIO.x, PATIO.y);
-        this.andar(m, ENTRADA, 1400, () => this.tweens.add({ targets: m, alpha: 0, duration: 300, onComplete: () => m.destroy() }));
-        this.flutuar("🧭 " + por + " entrou na mina", ENTRADA.x + 30, ENTRADA.y + 6, "#9ecbff");
+        this.andar(m, ENTRADA, 1600, () => this.tweens.add({ targets: m, alpha: 0, duration: 300, onComplete: () => m.destroy() }));
+        this.flutuar("🧭 " + por + " entrou na mina", ENTRADA.x + 46, ENTRADA.y + 10, "#9ecbff");
       }
       expedicaoRetornada(por, minerio) {      // expedicao.retornada
         const m = this.mineiro(ENTRADA.x, ENTRADA.y).setAlpha(0);
         this.tweens.add({ targets: m, alpha: 1, duration: 300 });
-        this.andar(m, PILHAS.minerio, 1400, () => m.destroy());
-        this.flutuar("🧭 " + por + " voltou: +" + minerio + " ⛰️", ENTRADA.x + 30, ENTRADA.y + 6, "#9be59b");
+        this.andar(m, { x: PILHAS.minerio.x, y: PILHAS.minerio.y + 6 }, 1400, () => m.destroy());
+        this.flutuar("🧭 " + por + " voltou: +" + minerio + " minério", ENTRADA.x + 46, ENTRADA.y + 10, "#9be59b");
       }
       expedicaoPerdida(por) {                 // expedicao.perdida
-        this.cameras.main.shake(250, 0.004);
-        for (let i = 0; i < 6; i++) {         // desmoronamento na boca da mina
-          const pedra = this.add.image(ENTRADA.x + Phaser.Math.Between(-8, 8), ENTRADA.y - 20, "pedra").setDepth(160);
-          this.tweens.add({ targets: pedra, y: ENTRADA.y + Phaser.Math.Between(-2, 4), duration: 400 + i * 60, ease: "Bounce.Out",
-            onComplete: () => this.tweens.add({ targets: pedra, alpha: 0, delay: 600, duration: 400, onComplete: () => pedra.destroy() }) });
+        this.cameras.main.shake(260, 0.004);
+        for (let i = 0; i < 7; i++) {         // desmoronamento na boca da mina
+          const pedra = this.add.image(ENTRADA.x + this.sorte.between(-9, 9), ENTRADA.y - 30, "pedra").setDepth(200);
+          this.tweens.add({ targets: pedra, y: ENTRADA.y + this.sorte.between(-3, 3), duration: 400 + i * 60, ease: "Bounce.Out",
+            onComplete: () => this.tweens.add({ targets: pedra, alpha: 0, delay: 700, duration: 400, onComplete: () => pedra.destroy() }) });
         }
-        this.flutuar("💀 " + por + " perdeu a carga", ENTRADA.x + 30, ENTRADA.y + 6, "#ff8a80");
+        this.flutuar("💀 " + por + " perdeu a carga", ENTRADA.x + 46, ENTRADA.y + 10, "#ff8a80");
       }
       recusado(motivo) {                      // operacao.recusada (só quem pediu)
         this.cameras.main.shake(180, 0.006);
-        this.flutuar("✋ " + motivo, LARG / 2, ALT - 26, "#ff8a80");
+        this.flutuar("✋ " + motivo, LARG / 2, ALT - 30, "#ff8a80");
       }
     }
 
@@ -456,7 +447,7 @@
         if (partida) return;
         partida = new Phaser.Game({
           type: Phaser.AUTO, parent: idContainer, width: LARG * ZOOM, height: ALT * ZOOM,
-          pixelArt: true, backgroundColor: "#1a120d", scene: MinaScene, audio: { noAudio: true },
+          pixelArt: true, backgroundColor: "#3a2a1f", scene: MinaScene, audio: { noAudio: true },
         });
       },
       reiniciar(estado) {                     // vila.reiniciada: recria a cena vazia
@@ -468,6 +459,7 @@
       vilaIniciada: (...a) => chamar("vilaIniciada", ...a),
       vilaPausada: (...a) => chamar("vilaPausada", ...a),
       vilaEncerrada: (...a) => chamar("vilaEncerrada", ...a),
+      vitoria: (...a) => chamar("vitoria", ...a),
       obraIniciada: (...a) => chamar("obraIniciada", ...a),
       obraConcluida: (...a) => chamar("obraConcluida", ...a),
       recursoProduzido: (...a) => chamar("recursoProduzido", ...a),
@@ -492,8 +484,9 @@
       const conectado = ref(false);
       const estado = reactive({
         fase: "aguardando", pedra: 0, minerio: 0, barras: 0, mineiros: 0, limite: 0,
-        producao_pedra: 0, producao_minerio: 0, intervalo: 0, tempo_obra: 0,
-        custo_fornalha: 0, custo_deposito: 0, fornalhas: 0, depositos: 0, em_obra: 0, expedicoes: 0,
+        producao_pedra: 0, producao_minerio: 0, intervalo: 0, fornalhas: 0, depositos: 0, em_obra: 0, expedicoes: 0,
+        custos: { fornalha: { pedra: 0 }, deposito: { barras: 0 }, estatua: { pedra: 0, barras: 0 } },
+        tempos: {}, lotes: [], estatua: null,
       });
       const avisos = ref([]);
       const eventos = ref([]);              // linha do tempo do painel de eventos
@@ -568,8 +561,8 @@
         // porque o estoque e os mineiros da vila mudaram para todo mundo.
         ouvir("construcao.iniciada", "mostra o canteiro da obra", (d) => {
           atualizar(d);
-          avisar(d.por + " começou a construir " + (d.tipo === "deposito" ? "um depósito" : "uma fornalha"));
-          jogo.obraIniciada(d.estado, d.tipo);
+          avisar(d.por + " começou " + { fornalha: "uma fornalha", deposito: "um depósito", estatua: "a estátua de ouro!" }[d.tipo]);
+          jogo.obraIniciada(d.estado, d.tipo, d.lote);
         });
         // on operacao.recusada: só chega para quem fez o pedido recusado. Não há
         // estado para atualizar (nada mudou no servidor); só avisamos o motivo.
@@ -588,10 +581,18 @@
         // construcao.iniciada. Chega para todos porque o mineiro ficou livre.
         ouvir("construcao.concluida", "transforma o canteiro na construção pronta", (d) => {
           atualizar(d);
-          avisar(d.tipo === "deposito"
-            ? "O depósito de " + d.por + " ficou pronto! +1 mineiro"
-            : "A fornalha de " + d.por + " ficou pronta!", "ok");
-          jogo.obraConcluida(d.estado, d.tipo);
+          avisar({ fornalha: "A fornalha de " + d.por + " ficou pronta!",
+                   deposito: "O depósito de " + d.por + " ficou pronto! +1 mineiro",
+                   estatua: "A estátua de ouro de " + d.por + " ficou pronta!" }[d.tipo], "ok");
+          jogo.obraConcluida(d.estado, d.tipo, d.lote);
+        });
+
+        // on objetivo.cumprido: o servidor emite logo depois da estátua ficar
+        // pronta (causa: construcao.concluida). Chega para todos: a mina venceu.
+        ouvir("objetivo.cumprido", "comemora a vitória e encerra a mina", (d) => {
+          atualizar(d);
+          avisar("🏆 Vitória! " + d.por + " ergueu a estátua de ouro. O Mestre pode começar do zero.", "ok");
+          jogo.vitoria(d.por);
         });
         // on vila.encerrada: chega para todos; a partir daqui o servidor recusa
         // qualquer ação, então a tela só precisa mostrar que a mina fechou.
