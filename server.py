@@ -4,8 +4,7 @@ import socketio
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 app = socketio.ASGIApp(sio, static_files={
-    "/": "client/index.html",
-    "/assets": "client/assets",      # mapa, tileset e sprites da vila
+    "/": "client/index.html",        # a mina é desenhada por código: não há imagens
 })
 
 # A partir da Etapa 1, adicione o seu código ABAIXO desta linha.
