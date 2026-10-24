@@ -66,8 +66,8 @@
     <!-- A mina desenhada pelo Phaser, com a barra de status em cima -->
     <div class="mina">
       <div class="hud">
-        <span>🪨 {{ estado.pedra }} <small>+{{ estado.producao_pedra }}/{{ estado.intervalo }}s</small></span>
-        <span>⛰️ {{ estado.minerio }} <small>+{{ estado.producao_minerio }}/{{ estado.intervalo }}s</small></span>
+        <span>🪨 {{ estado.pedra }} <small>+{{ livres * estado.pedra_por_mineiro }}/{{ estado.intervalo }}s</small></span>
+        <span>⛰️ {{ estado.minerio }} <small>+{{ livres * estado.minerio_por_mineiro }}/{{ estado.intervalo }}s</small></span>
         <span>🧱 {{ estado.barras }}</span>
         <span>⛏️ {{ estado.mineiros }}/{{ estado.limite }} <small>ocupados</small></span>
         <span>🔥 {{ estado.fornalhas }} · 📦 {{ estado.depositos }} · 🚧 {{ estado.em_obra }} · 🧭 {{ estado.expedicoes }}</span>
@@ -409,11 +409,11 @@
         const texto = { fornalha: "🔥 Fornalha acesa!", deposito: "📦 Depósito pronto! +1 mineiro", estatua: "🏆 Estátua pronta!" }[tipo];
         this.flutuar(texto, x, y - 26, "#9be59b");
       }
-      recursoProduzido(estado, fundidas) {    // recurso.produzido
+      recursoProduzido(pedra, minerio, fundidas) {   // recurso.produzido
         const carrinho = this.add.image(48, 56, "carrinho").setDepth(99);   // a produção sai da mina pelo trilho
         this.tweens.add({ targets: carrinho, y: 98, duration: 900, onComplete: () => carrinho.destroy() });
-        this.flutuar("+" + estado.producao_pedra, PILHAS.pedra.x, PILHAS.pedra.y - 16, "#e8e8e8");
-        this.flutuar("+" + estado.producao_minerio, PILHAS.minerio.x, PILHAS.minerio.y - 16, "#ffcc80");
+        if (pedra) this.flutuar("+" + pedra, PILHAS.pedra.x, PILHAS.pedra.y - 16, "#e8e8e8");
+        if (minerio) this.flutuar("+" + minerio, PILHAS.minerio.x, PILHAS.minerio.y - 16, "#ffcc80");
         if (fundidas) this.flutuar("+" + fundidas, PILHAS.barras.x, PILHAS.barras.y - 16, "#ffe27a");
       }
       expedicaoIniciada(por) {                // expedicao.iniciada
@@ -484,7 +484,7 @@
       const conectado = ref(false);
       const estado = reactive({
         fase: "aguardando", pedra: 0, minerio: 0, barras: 0, mineiros: 0, limite: 0,
-        producao_pedra: 0, producao_minerio: 0, intervalo: 0, fornalhas: 0, depositos: 0, em_obra: 0, expedicoes: 0,
+        pedra_por_mineiro: 0, minerio_por_mineiro: 0, intervalo: 0, fornalhas: 0, depositos: 0, em_obra: 0, expedicoes: 0,
         custos: { fornalha: { pedra: 0 }, deposito: { barras: 0 }, estatua: { pedra: 0, barras: 0 } },
         tempos: {}, lotes: [], estatua: null,
       });
@@ -492,6 +492,7 @@
       const eventos = ref([]);              // linha do tempo do painel de eventos
       const contadores = reactive({});      // quantas vezes cada evento ocorreu
       const ocultarProducao = ref(false);
+      const livres = computed(() => Math.max(0, estado.limite - estado.mineiros));   // quem está minerando
       const eventosVisiveis = computed(() =>
         eventos.value.filter((e) => !(ocultarProducao.value && e.nome === "recurso.produzido")));
       const jogo = criarJogo();      // a vila desenhada (Phaser)
@@ -574,7 +575,7 @@
         // clicar. O cliente nunca conta o tempo; só reage quando o fato chega.
         ouvir("recurso.produzido", "atualiza pedra, minério e barras e mostra o +N", (d) => {
           atualizar(d);
-          jogo.recursoProduzido(d.estado, d.barras_fundidas);
+          jogo.recursoProduzido(d.pedra, d.minerio, d.barras_fundidas);
         });
 
         // on construcao.concluida: também vem de um temporizador, disparado pela
@@ -674,7 +675,7 @@
         pedir("expedicao.retorno_solicitado");
       }
 
-      return { nome, papel, conectado, estado, avisos, eventosVisiveis, contadores, ocultarProducao,
+      return { nome, papel, conectado, estado, livres, avisos, eventosVisiveis, contadores, ocultarProducao,
                entrar, abrirVila, pausarVila, encerrarVila, reiniciarVila, construir, enviarExpedicao, chamarExpedicao };
     }
   }).mount("#app");

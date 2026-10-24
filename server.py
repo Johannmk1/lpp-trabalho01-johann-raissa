@@ -19,7 +19,7 @@ CONSTRUCOES = {
                  "falta": {"pedra": "Pedras insuficientes"}},
     "deposito": {"custo": {"barras": 5}, "tempo": 8, "usa_lote": True,
                  "falta": {"barras": "Barras insuficientes"}},
-    "estatua": {"custo": {"pedra": 200, "barras": 30}, "tempo": 15, "usa_lote": False,
+    "estatua": {"custo": {"pedra": 500, "barras": 60}, "tempo": 15, "usa_lote": False,
                 "falta": {"pedra": "Pedras insuficientes para a estátua", "barras": "Barras insuficientes"}},
 }
 LOTES = 16          # espaço da mina: cada fornalha ou depósito ocupa um lote
@@ -36,8 +36,8 @@ ESTADO_INICIAL = {
     "barras": 0,              # recurso refinado, fundido pelas fornalhas
     "mineiros": 0,            # ocupados agora (obras + expedições)
     "limite": 2,              # máximo de mineiros
-    "producao_pedra": 10,     # pedras a cada INTERVALO
-    "producao_minerio": 5,    # minérios a cada INTERVALO
+    "pedra_por_mineiro": 5,   # cada mineiro LIVRE produz isso a cada INTERVALO
+    "minerio_por_mineiro": 3, # (quem está em obra ou expedição não minera)
     "intervalo": INTERVALO,
     "custos": {tipo: regra["custo"] for tipo, regra in CONSTRUCOES.items()},
     "tempos": {tipo: regra["tempo"] for tipo, regra in CONSTRUCOES.items()},
@@ -162,8 +162,11 @@ async def producao(ciclo):
         await sio.sleep(INTERVALO)
         if estado["fase"] != "aberta" or ciclo != ciclo_producao:
             break
-        estado["pedra"] += estado["producao_pedra"]
-        estado["minerio"] += estado["producao_minerio"]
+        livres = estado["limite"] - estado["mineiros"]
+        pedra = livres * estado["pedra_por_mineiro"]
+        minerio = livres * estado["minerio_por_mineiro"]
+        estado["pedra"] += pedra
+        estado["minerio"] += minerio
         # Recurso refinado: cada fornalha pronta funde 2 minérios em 1 barra,
         # enquanto houver minério.
         fundidas = min(estado["fornalhas"], estado["minerio"] // 2)
@@ -171,7 +174,8 @@ async def producao(ciclo):
         estado["barras"] += fundidas
         # emit para TODOS: o estoque subiu; os clientes não perguntam
         # "já produziu?", só escutam este fato.
-        await sio.emit("recurso.produzido", fato("temporizador", barras_fundidas=fundidas))
+        await sio.emit("recurso.produzido",
+                       fato("temporizador", pedra=pedra, minerio=minerio, barras_fundidas=fundidas))
 
 
 async def obra(nome, tipo, lote, rodada):
