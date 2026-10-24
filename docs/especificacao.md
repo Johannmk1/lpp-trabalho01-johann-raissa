@@ -33,8 +33,8 @@ Começar do zero devolve a mina ao estado inicial. Obras e expedições da tempo
 
 | Recurso | Tipo | Início | Como entra | Para que serve |
 |---|---|---|---|---|
-| Pedra | primário | 150 | produção automática | construir fornalhas e a estátua |
-| Minério | primário | 0 | produção automática e retorno de expedição | ser fundido em barras |
+| Pedra | primário | 150 | produção dos mineiros livres | construir fornalhas e a estátua |
+| Minério | primário | 0 | produção dos mineiros livres e retorno de expedição | ser fundido em barras |
 | Barras | refinado | 0 | fundidas pelas fornalhas prontas | construir depósitos e a estátua |
 
 O ciclo: **pedra** constrói fornalhas → as fornalhas fundem **minério** em **barras** → as barras constroem depósitos → cada depósito dá **mais um mineiro** → mais mineiros fazem mais obras e expedições → com pedra e barras suficientes, a mina ergue a **estátua de ouro** e vence a temporada.
@@ -44,8 +44,8 @@ O ciclo: **pedra** constrói fornalhas → as fornalhas fundem **minério** em *
 | Construção | Custo | Tempo da obra | Efeito quando fica pronta |
 |---|---|---|---|
 | Fornalha | 50 pedras | 8 segundos | a cada produção, funde 2 minérios em 1 barra, enquanto houver minério |
-| Depósito | 5 barras | 8 segundos | +1 no limite de mineiros |
-| Estátua de ouro | 200 pedras e 30 barras | 15 segundos | a mina cumpre o objetivo e a temporada termina com vitória |
+| Depósito | 5 barras | 8 segundos | +1 no limite de mineiros (mais um mineiro produzindo) |
+| Estátua de ouro | 500 pedras e 60 barras | 15 segundos | a mina cumpre o objetivo e a temporada termina com vitória |
 
 ### Espaço
 
@@ -55,7 +55,7 @@ O ciclo: **pedra** constrói fornalhas → as fornalhas fundem **minério** em *
 ### Números
 
 - Limite inicial de mineiros: **2**. Cada obra e cada expedição ocupa 1 mineiro enquanto dura.
-- Produção automática: a cada **5 segundos** com a temporada aberta, **+10 pedras** e **+5 minérios**.
+- Produção automática: a cada **5 segundos** com a temporada aberta, **cada mineiro livre** produz **+5 pedras** e **+3 minérios**. Mineiro livre = limite de mineiros menos os ocupados. Mineiro em obra ou em expedição não produz: construir e explorar tiram gente da mina por um tempo.
 - Expedição: não custa recurso, ocupa 1 mineiro e tem **prazo de 20 segundos** para retornar. Cada jogador tem no máximo uma expedição em andamento. O prazo continua correndo durante a pausa.
 - Retorno a tempo: a expedição traz **2 minérios por segundo** que passou fora e o mineiro fica livre.
 - Prazo vencido: a carga se perde e o mineiro volta livre, sem nada.
@@ -72,8 +72,8 @@ O ciclo: **pedra** constrói fornalhas → as fornalhas fundem **minério** em *
 | Encerre a temporada antes de começar do zero | começar do zero fora da fase `encerrada` |
 | Só jogadores constroem e enviam expedições | o Mestre pede construção ou expedição |
 | Pedras insuficientes | fornalha com menos de 50 pedras |
-| Barras insuficientes | depósito com menos de 5 barras; estátua com menos de 30 barras |
-| Pedras insuficientes para a estátua | estátua com menos de 200 pedras |
+| Barras insuficientes | depósito com menos de 5 barras; estátua com menos de 60 barras |
+| Pedras insuficientes para a estátua | estátua com menos de 500 pedras |
 | Sem lote livre | fornalha ou depósito com os 16 lotes ocupados |
 | A estátua já foi começada | segundo pedido de estátua |
 | Construção desconhecida | pedido de construção de um tipo que não existe |
@@ -99,7 +99,7 @@ Pedidos terminam em `_solicitada`/`_solicitado`. Fatos ficam no passado. Todo fa
 | `construcao.solicitada` | Jogador | Servidor | pedido (diz o tipo: fornalha, depósito ou estátua) | é um pedido; nada muda |
 | `construcao.iniciada` | Servidor | Todos | `construcao.solicitada` | debita o custo do tipo, +1 mineiro ocupado, ocupa um lote (ou a praça, se for a estátua) com a obra |
 | `operacao.recusada` | Servidor | Só quem pediu | o pedido recusado | nada; informa o motivo |
-| `recurso.produzido` | Servidor | Todos | temporizador | +10 pedras, +5 minérios; cada fornalha pronta funde 2 minérios em 1 barra |
+| `recurso.produzido` | Servidor | Todos | temporizador | +5 pedras e +3 minérios por mineiro livre; depois cada fornalha pronta funde 2 minérios em 1 barra |
 | `construcao.concluida` | Servidor | Todos | `construcao.iniciada` (temporizador) | -1 mineiro ocupado, -1 obra; +1 fornalha pronta, ou +1 depósito pronto e +1 no limite de mineiros, ou a estátua pronta |
 | `objetivo.cumprido` | Servidor | Todos | `construcao.concluida` (estátua) | fase vira `encerrada`, com vitória |
 | `expedicao.solicitada` | Jogador | Servidor | pedido | é um pedido; nada muda |
@@ -120,7 +120,7 @@ Dado que a temporada está aberta, com 100 pedras e 2 de 2 mineiros ocupados, qu
 
 ### Passagem do tempo
 
-Dado que a temporada está aberta, com 100 pedras, 10 minérios, 0 barras e 1 fornalha pronta, quando passam 5 segundos sem nenhum pedido, então o servidor emite `recurso.produzido` para todos com causa `temporizador`, e o estado passa a 110 pedras, 13 minérios e 1 barra.
+Dado que a temporada está aberta, com 100 pedras, 10 minérios, 0 barras, 1 fornalha pronta e 2 de 3 mineiros livres, quando passam 5 segundos sem nenhum pedido, então o servidor emite `recurso.produzido` para todos com causa `temporizador`, e o estado passa a 110 pedras, 14 minérios e 1 barra (os 2 livres produzem 10 pedras e 6 minérios; a fornalha funde 2 minérios em 1 barra).
 
 Dado que a fornalha de A recebeu `construcao.iniciada`, quando passam 8 segundos, então o servidor emite `construcao.concluida` para todos com causa `construcao.iniciada (temporizador)`, o mineiro fica livre e a fornalha passa a fundir barras.
 
@@ -142,7 +142,7 @@ Dado que a temporada está aberta e uma fornalha está em obra, quando o Mestre 
 
 ### Objetivo: estátua de ouro
 
-Dado que a temporada está aberta, com 250 pedras, 40 barras e 1 mineiro livre, quando o Jogador A emite `construcao.solicitada` para a estátua, então o servidor emite `construcao.iniciada` para todos, ficam 50 pedras e 10 barras, e um segundo pedido de estátua recebe `operacao.recusada` com "A estátua já foi começada". Quando passam 15 segundos, o servidor emite `construcao.concluida` e logo depois `objetivo.cumprido` para todos, e a fase vira `encerrada`.
+Dado que a temporada está aberta, com 550 pedras, 70 barras e 1 mineiro livre, quando o Jogador A emite `construcao.solicitada` para a estátua, então o servidor emite `construcao.iniciada` para todos, ficam 50 pedras e 10 barras, e um segundo pedido de estátua recebe `operacao.recusada` com "A estátua já foi começada". Quando passam 15 segundos, o servidor emite `construcao.concluida` e logo depois `objetivo.cumprido` para todos, e a fase vira `encerrada`.
 
 ### Sem lote livre
 
