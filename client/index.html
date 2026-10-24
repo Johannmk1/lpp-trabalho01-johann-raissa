@@ -58,10 +58,12 @@
     <div id="jogo"></div>
 
     <section class="painel">
-      <p>🪵 Toras: <strong>{{ estado.toras }}</strong> (+{{ porMinuto }}/min)</p>
-      <p>👷 Trabalhadores: {{ estado.trabalhadores }}/{{ estado.limite }}
-        <progress :value="estado.trabalhadores" :max="estado.limite"></progress></p>
-      <p>🏠 Construções: {{ estado.concluidas }} concluídas, {{ estado.em_obra }} em obra</p>
+      <p>🪨 Pedra: <strong>{{ estado.pedra }}</strong> (+{{ estado.producao_pedra }} a cada {{ estado.intervalo }} s)</p>
+      <p>⛰️ Minério: <strong>{{ estado.minerio }}</strong> (+{{ estado.producao_minerio }} a cada {{ estado.intervalo }} s)</p>
+      <p>🧱 Barras: <strong>{{ estado.barras }}</strong></p>
+      <p>⛏️ Mineiros: {{ estado.mineiros }}/{{ estado.limite }}
+        <progress :value="estado.mineiros" :max="estado.limite"></progress></p>
+      <p>🔥 Fornalhas: {{ estado.concluidas }} prontas, {{ estado.em_obra }} em obra · 🧭 Expedições: {{ estado.expedicoes }}</p>
     </section>
 
     <section>
@@ -69,7 +71,7 @@
         <button @click="abrirVila">Abrir temporada</button>
         <button @click="encerrarVila">Encerrar temporada</button>
       </template>
-      <button v-else @click="construir">🔨 Construir (custo {{ estado.custo }} toras)</button>
+      <button v-else @click="construir">🔨 Construir fornalha (custo {{ estado.custo }} pedras)</button>
     </section>
 
     <ul class="avisos">
@@ -248,8 +250,9 @@
       const papel = ref("");
       const conectado = ref(false);
       const estado = reactive({
-        fase: "aguardando", toras: 0, trabalhadores: 0, limite: 0,
-        producao: 0, intervalo: 0, tempo_obra: 0, custo: 0, concluidas: 0, em_obra: 0,
+        fase: "aguardando", pedra: 0, minerio: 0, barras: 0, mineiros: 0, limite: 0,
+        producao_pedra: 0, producao_minerio: 0, intervalo: 0, tempo_obra: 0, custo: 0,
+        concluidas: 0, em_obra: 0, expedicoes: 0,
       });
       const avisos = ref([]);
       const eventos = ref([]);              // linha do tempo do painel de eventos
@@ -259,9 +262,6 @@
         eventos.value.filter((e) => !(ocultarProducao.value && e.nome === "recurso.produzido")));
       const jogo = criarJogo();      // a vila desenhada (Phaser)
       let socket = null;
-
-      const porMinuto = computed(() =>
-        estado.intervalo ? Math.round(estado.producao * 60 / estado.intervalo) : 0);
 
       function avisar(texto, tipo = "info") {
         avisos.value.unshift({ texto, tipo });
@@ -277,7 +277,8 @@
         if (!d) return "";
         const { estado: e, causa, ...resto } = d;
         const partes = Object.entries(resto).map(([k, v]) => k + ": " + v);
-        if (e) partes.push("toras " + e.toras + ", trabalhadores " + e.trabalhadores + "/" + e.limite);
+        if (e) partes.push("pedra " + e.pedra + ", minério " + e.minerio + ", barras " + e.barras +
+                           ", mineiros " + e.mineiros + "/" + e.limite);
         return partes.join(" · ");
       }
       function registrar(sentido, nome, dados, reacao = "") {
@@ -308,7 +309,12 @@
 
         // ===== ESCUTAS (on): o cliente reage aos FATOS do servidor =====
         // ouvir(evento, "o que o cliente faz ao receber", função)
-        // ETAPA 1: ouvir "estado.sincronizado"   -> jogo.mostrarEstado(...)
+        // on estado.sincronizado: chega só para este cliente, ao conectar. É o ponto
+        // de partida: daqui em diante a tela só muda quando chegar um fato do servidor.
+        ouvir("estado.sincronizado", "guarda o estado e desenha a mina", (d) => {
+          atualizar(d);
+          jogo.mostrarEstado(d.estado);
+        });
         // ETAPA 2: ouvir "vila.iniciada"         -> jogo.vilaIniciada()
         // ETAPA 3: ouvir "construcao.iniciada"   -> jogo.obraIniciada(...)
         // ETAPA 4: ouvir "operacao.recusada"     -> jogo.recusado(...)
@@ -329,7 +335,7 @@
         // ETAPA 6: pedir "vila.encerramento_solicitado"
       }
 
-      return { nome, papel, conectado, estado, avisos, eventosVisiveis, contadores, ocultarProducao, porMinuto,
+      return { nome, papel, conectado, estado, avisos, eventosVisiveis, contadores, ocultarProducao,
                entrar, abrirVila, construir, encerrarVila };
     }
   }).mount("#app");
