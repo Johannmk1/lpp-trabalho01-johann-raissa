@@ -315,7 +315,13 @@
           atualizar(d);
           jogo.mostrarEstado(d.estado);
         });
-        // ETAPA 2: ouvir "vila.iniciada"         -> jogo.vilaIniciada()
+        // on vila.iniciada: chega para todos quando o servidor aceita a abertura.
+        // O cliente não abre a temporada sozinho; só reage ao fato confirmado.
+        ouvir("vila.iniciada", "muda a faixa para temporada aberta", (d) => {
+          atualizar(d);
+          avisar("A temporada começou! Os mineiros podem trabalhar.", "ok");
+          jogo.vilaIniciada();
+        });
         // ETAPA 3: ouvir "construcao.iniciada"   -> jogo.obraIniciada(...)
         // ETAPA 4: ouvir "operacao.recusada"     -> jogo.recusado(...)
         // ETAPA 5: ouvir "recurso.produzido"     -> jogo.recursoProduzido(...)
@@ -326,7 +332,8 @@
       // ===== PEDIDOS (emit): o cliente PEDE algo ao servidor =====
       // pedir(evento)
       function abrirVila() {
-        // ETAPA 2: pedir "vila.abertura_solicitada"
+        // emit vila.abertura_solicitada: o botão só PEDE; quem decide é o servidor.
+        pedir("vila.abertura_solicitada");
       }
       function construir() {
         // ETAPA 3: pedir "construcao.solicitada"
